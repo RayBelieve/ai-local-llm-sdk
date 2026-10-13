@@ -1,0 +1,10 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+crates/model-sdk/target/
+crates/model-sdk/Cargo.lock
+**/__pycache__/
+*.log
+screenshots/
+portable/

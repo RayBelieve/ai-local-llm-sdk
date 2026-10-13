@@ -1,0 +1,19 @@
+[package]
+name = "subtitle-workbench"
+version = "0.1.0"
+description = "Local subtitle workbench"
+authors = ["Subtitle Workbench"]
+edition = "2021"
+
+[lib]
+name = "subtitle_workbench_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+model-sdk = { path = "../crates/model-sdk" }
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
