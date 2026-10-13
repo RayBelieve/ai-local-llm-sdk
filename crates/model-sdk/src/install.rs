@@ -309,6 +309,20 @@ impl ModelSdk {
                 return Err("压缩包内没有 crispasr.exe。".into());
             }
             fs::write(staging.join("backend.txt"), spec.id).map_err(|error| error.to_string())?;
+            let model = self
+                .models()?
+                .into_iter()
+                .filter(|item| {
+                    item.descriptor.format == "whisper-ggml"
+                        || item.descriptor.format == "qwen3-gguf"
+                })
+                .find_map(|item| item.path);
+            resources::probe_crispasr(
+                spec,
+                &staging.join("crispasr.exe"),
+                &system,
+                model.as_deref(),
+            )?;
             let target = parent.join(spec.id);
             let backup = parent.join(format!("{}-backup-{nonce}", spec.id));
             if target.exists() {
@@ -323,6 +337,7 @@ impl ModelSdk {
             if backup.exists() {
                 let _ = fs::remove_dir_all(backup);
             }
+            resources::clear_probe_cache();
             self.clear_engine_override(id)?;
             task.progress("engine", 100, "推理引擎已就绪");
             Ok(target.join("crispasr.exe"))

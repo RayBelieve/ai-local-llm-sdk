@@ -157,12 +157,21 @@ impl ModelSdk {
         let system = resources::system_check(&selection);
         let mut engines = Vec::new();
         for spec in resources::ENGINES {
-            let (suitable, reason) = resources::suitability(spec, &system);
+            let path = self.engine_path_with(&registry, spec.id)?;
+            let (mut suitable, mut reason) = resources::suitability(spec, &system);
+            if suitable {
+                if let Some(path) = &path {
+                    if let Err(error) = resources::probe_crispasr(spec, path, &system, None) {
+                        suitable = false;
+                        reason = Some(error);
+                    }
+                }
+            }
             engines.push(EngineInfo {
                 id: spec.id.into(),
                 provider: "crispasr".into(),
                 label: spec.label.into(),
-                path: self.engine_path_with(&registry, spec.id)?,
+                path,
                 suitable,
                 reason,
                 capabilities: vec![TRANSCRIPTION.into()],
@@ -364,6 +373,23 @@ impl ModelSdk {
         {
             return Err("此 Python 环境缺少 OpenVINO、ONNX Runtime 或 NumPy。".into());
         }
+        if id != resources::OPENVINO_ENGINE_ID {
+            let spec = resources::engine_spec(id)?;
+            let system = resources::system_check(&Selection::default());
+            let (suitable, reason) = resources::suitability(spec, &system);
+            if !suitable {
+                return Err(reason.unwrap_or_else(|| "此引擎不适合当前设备。".into()));
+            }
+            let model = self
+                .models()?
+                .into_iter()
+                .filter(|item| {
+                    item.descriptor.format == "whisper-ggml"
+                        || item.descriptor.format == "qwen3-gguf"
+                })
+                .find_map(|item| item.path);
+            resources::probe_crispasr(spec, path, &system, model.as_deref())?;
+        }
         let mut registry = self.registry()?;
         registry
             .engine_paths
@@ -460,11 +486,26 @@ impl ModelSdk {
                 reason: Some("推理引擎尚未安装或登记。".into()),
             });
         }
-        if self.model_path_with(&registry, &descriptor).is_none() {
+        let Some(model) = self.model_path_with(&registry, &descriptor) else {
             return Ok(Readiness {
                 ready: false,
                 reason: Some("模型尚未安装或登记。".into()),
             });
+        };
+        if engine_id != resources::OPENVINO_ENGINE_ID {
+            let spec = resources::engine_spec(engine_id)?;
+            let system = resources::system_check(&Selection::default());
+            if let Err(error) = resources::probe_crispasr(
+                spec,
+                engine.path.as_deref().unwrap(),
+                &system,
+                Some(&model),
+            ) {
+                return Ok(Readiness {
+                    ready: false,
+                    reason: Some(error),
+                });
+            }
         }
         Ok(Readiness {
             ready: true,
@@ -541,7 +582,7 @@ mod tests {
         let sdk = ModelSdk::new(&root).unwrap();
         let engine = root.join("crispasr.exe");
         fs::write(&engine, b"test engine").unwrap();
-        sdk.register_local_engine("vulkan", &engine).unwrap();
+        assert!(sdk.register_local_engine("vulkan", &engine).is_err());
         let model = root.join("qwen3-asr-1.7b-custom.gguf");
         fs::write(&model, b"GGUFtest").unwrap();
         sdk.register_local_model(
@@ -555,7 +596,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            sdk.check("vulkan", "qwen3-custom", TRANSCRIPTION)
+            !sdk.check("vulkan", "qwen3-custom", TRANSCRIPTION)
                 .unwrap()
                 .ready
         );

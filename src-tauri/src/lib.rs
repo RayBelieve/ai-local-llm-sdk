@@ -70,28 +70,57 @@ fn resource_status(app: &tauri::AppHandle) -> Result<resources::ResourceStatus, 
     status.aligner_path = sdk
         .aligner_path()
         .map(|path| path.to_string_lossy().into_owned());
+    let sdk_engines = sdk.engines()?;
     for engine in &mut status.engines {
-        engine.installed_path = sdk
-            .engine_path(&engine.id)?
-            .map(|path| path.to_string_lossy().into_owned());
+        if let Some(info) = sdk_engines.iter().find(|item| item.id == engine.id) {
+            engine.installed_path = info
+                .path
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned());
+            engine.suitable = info.suitable;
+            engine.reason = info.reason.clone();
+        }
     }
     for model in &mut status.models {
         model.installed_path = sdk
             .model_path(&model.id)?
             .map(|path| path.to_string_lossy().into_owned());
     }
+    let readiness = sdk.check(
+        &status.selected_engine_id,
+        &status.selected_model_id,
+        TRANSCRIPTION,
+    )?;
+    if !readiness.ready
+        && status
+            .models
+            .iter()
+            .any(|model| model.id == status.selected_model_id && model.installed_path.is_some())
+    {
+        if let Some(engine) = status.engines.iter_mut().find(|engine| {
+            engine.id == status.selected_engine_id && engine.installed_path.is_some()
+        }) {
+            engine.suitable = false;
+            engine.reason = readiness.reason;
+        }
+    }
+    status.recommended_engine_id = resources::recommended_engine_id(|id| {
+        status
+            .engines
+            .iter()
+            .any(|engine| engine.id == id && engine.suitable)
+    })
+    .unwrap_or_default()
+    .to_string();
+    for engine in &mut status.engines {
+        engine.recommended = engine.id == status.recommended_engine_id;
+    }
     status.ready = status.system.ffmpeg_available
         && status
             .engines
             .iter()
             .any(|engine| engine.id == status.selected_engine_id && engine.suitable)
-        && sdk
-            .check(
-                &status.selected_engine_id,
-                &status.selected_model_id,
-                TRANSCRIPTION,
-            )?
-            .ready;
+        && readiness.ready;
     let legacy = app
         .path()
         .app_local_data_dir()
@@ -336,15 +365,6 @@ async fn download_engine_variant(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let _guard = state.resources.lock().map_err(|error| error.to_string())?;
-        let status = resource_status(&app)?;
-        if let Some(option) = status.engines.iter().find(|item| item.id == engine_id) {
-            if !option.suitable {
-                return Err(option
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| "此引擎不适合当前设备。".into()));
-            }
-        }
         sdk(&app)?
             .download_engine(&engine_id, &task(&app))
             .map(|path| path.to_string_lossy().into_owned())

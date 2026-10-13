@@ -22,10 +22,12 @@ export type ResourceStatus = {
   system: {
     platform: string;
     architecture: string;
+    windowsBuild: number | null;
     cpu: string;
     avx2: boolean;
     gpus: { name: string; vendor: string; driver: string }[];
     nvidiaDriver: string | null;
+    nvidiaComputeCapability: string | null;
     ffmpegPath: string | null;
     ffmpegAvailable: boolean;
     diagnostics: string[];
@@ -279,10 +281,10 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
           <section className="inspect-section">
             <div className="inspect-heading"><MonitorCog size={16} /><h2>系统自检</h2></div>
             <div className="inspect-grid">
-              <div><span>平台 / 架构</span><strong>{status.system.platform} / {status.system.architecture}</strong></div>
+              <div><span>平台 / 架构</span><strong>{status.system.platform} / {status.system.architecture}{status.system.windowsBuild ? ` · ${status.system.windowsBuild}` : ""}</strong></div>
               <div><span>处理器</span><strong title={status.system.cpu}>{status.system.cpu}</strong></div>
               <div><span>AVX2</span><strong>{status.system.avx2 ? "可用" : "不支持"}</strong></div>
-              <div><span>NVIDIA 驱动</span><strong>{status.system.nvidiaDriver || "未检测到"}</strong></div>
+              <div><span>NVIDIA 驱动 / 算力</span><strong>{status.system.nvidiaDriver || "未检测到"}{status.system.nvidiaComputeCapability ? ` / ${status.system.nvidiaComputeCapability}` : ""}</strong></div>
             </div>
             <div className="detected-gpus">
               <span>显卡</span>
@@ -323,7 +325,7 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
                 <FolderOpen size={15} />{engine?.provider === "openvino" ? "登记 Python 环境" : "登记本机文件"}
               </button>
               <button className="button button-primary" onClick={() => changeResource("engine", "download")}
-                disabled={locked || !engine?.suitable}>
+                disabled={locked || (!engine?.suitable && !engine?.installedPath)}>
                 {busy === "engine" ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}
                 {engine?.installedPath ? "重新安装" : "下载安装"}
               </button>

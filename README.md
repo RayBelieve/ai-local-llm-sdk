@@ -46,7 +46,11 @@ Large V3 Turbo 和 Large V2；每个下载项均有固定大小与 SHA-256 校�
 
 Tauri 命令 `get_resource_status` 返回系统自检、引擎和模型清单、已安装路径、适用性、
 推荐引擎、当前选择及 `ready` 状态。显卡由 Windows CIM 枚举，NVIDIA 驱动版本由
-`nvidia-smi` 读取；驱动版本未知时推荐 Vulkan。状态中还包括资源目录及旧资源迁移入口。
+`nvidia-smi` 读取，并同时检查 GPU 算力。CUDA 12 至少需要驱动 528、算力 5.0；
+CUDA 13 至少需要驱动 580、算力 7.5。驱动或算力未知时推荐 Vulkan 或 CPU。
+已安装的 CrispASR 还会运行设备诊断；所选引擎和模型首次使用前会执行短音频推理。
+诊断失败时状态显示原因并推荐其他适用引擎，下载的新引擎通过验证后才会替换旧版。
+状态中还包括资源目录及旧资源迁移入口。
 FFmpeg 可从「共享组件」下载到 `resources/tools/ffmpeg/`，安装后自动选用；也可通过
 `set_ffmpeg_path({ path })` 登记本机路径，传入 `null` 恢复 PATH。自动安装支持 Windows x86-64、macOS x86-64/ARM64 和 Linux x86-64/ARM64，下载固定的 `imageio-ffmpeg 0.6.0` 平台包并校验 SHA-256；当前仅在 Windows 实测。
 
@@ -65,7 +69,7 @@ macOS 可登记已装好这些 Python 依赖的 `python`/`python3` 和模型目�
 
 Windows 上已验证 CrispASR + Qwen3-ASR 1.7B Q4：同一 90 秒视频关闭对齐返回一段全文，开启对齐得到 49 条字幕；SDK Rust 测试和 OpenVINO worker 单元测试通过。SDK 与 Tauri 分层可继续使用，目前仍只实现语音转写能力。
 跨平台构建和 macOS 推理尚未验证；OpenVINO 仍使用估算的句级时间，CrispASR 引擎压缩包尚无固定哈希。
-开发资源和现有调试程序已移到仓库外的 `../LLM-local-runtime/`（`resources/` 与 EXE 同级），旧版 EXE 保存在其 `portable-archive/`。该调试程序需配合 Vite 开发服务器运行。重新执行 `npm run tauri dev` 会生成新的 EXE 和空资源目录；可在「资源与设备」页登记仓库外已有的引擎与模型文件。
+开发资源和可直接运行的 Release EXE 位于仓库外的 `../LLM-local-runtime/`（`resources/` 与 EXE 同级），旧版 EXE 保存在其 `portable-archive/`。重新执行 `npm run tauri dev` 会生成新的 EXE 和空资源目录；可在「资源与设备」页登记仓库外已有的引擎与模型文件。
 
 ## 下一步
 
