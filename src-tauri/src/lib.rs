@@ -313,6 +313,22 @@ fn set_ffmpeg_path(app: tauri::AppHandle, path: Option<String>) -> Result<(), St
 }
 
 #[tauri::command]
+async fn install_ffmpeg(app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _guard = state.resources.lock().map_err(|error| error.to_string())?;
+        let path = sdk(&app)?.install_ffmpeg(&task(&app))?;
+        let dir = data_dir(&app)?;
+        let mut selection = resources::load_selection(&dir)?;
+        selection.ffmpeg_path = Some(path.to_string_lossy().into_owned());
+        resources::save_selection(&dir, &selection)?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn download_engine_variant(
     app: tauri::AppHandle,
     engine_id: String,
@@ -529,6 +545,7 @@ pub fn run() {
             register_local_aligner,
             download_aligner,
             set_ffmpeg_path,
+            install_ffmpeg,
             allow_media_preview,
             download_model,
             download_model_variant,

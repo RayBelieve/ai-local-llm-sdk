@@ -80,6 +80,9 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
   const providerModels = status?.models.filter((item) => item.provider === engine?.provider) || [];
   const recommended = status?.engines.find((item) => item.recommended);
   const locked = Boolean(busy);
+  const ffmpegInstallSupported = status?.system && [
+    "windows:x86_64", "macos:x86_64", "macos:aarch64", "linux:x86_64", "linux:aarch64",
+  ].includes(`${status.system.platform}:${status.system.architecture}`);
 
   async function refresh() {
     onBusy("scan");
@@ -210,12 +213,29 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
       path = result;
     }
     onBusy("ffmpeg");
+    onProgress(null);
     onError("");
     onNotice("");
     try {
       await invoke("set_ffmpeg_path", { path });
       onStatus(await invoke<ResourceStatus>("get_resource_status"));
       onNotice(local ? "FFmpeg 路径已保存" : "已改用系统 PATH 中的 FFmpeg");
+    } catch (reason) {
+      onError(String(reason));
+    } finally {
+      onBusy(null);
+    }
+  }
+
+  async function installFfmpeg() {
+    onBusy("ffmpeg");
+    onProgress(null);
+    onError("");
+    onNotice("");
+    try {
+      await invoke("install_ffmpeg");
+      onStatus(await invoke<ResourceStatus>("get_resource_status"));
+      onNotice("FFmpeg 已就绪");
     } catch (reason) {
       onError(String(reason));
     } finally {
@@ -370,10 +390,14 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
             <div className="resource-controls">
               <button className="button" onClick={() => setFfmpeg(true)} disabled={locked}><FolderOpen size={15} />指定路径</button>
               <button className="button" onClick={() => setFfmpeg(false)} disabled={locked}><RefreshCw size={15} />使用系统 PATH</button>
+              <button className="button button-primary" onClick={installFfmpeg} disabled={locked || !ffmpegInstallSupported} title={!ffmpegInstallSupported ? "当前平台暂不支持自动安装" : undefined}>
+                {busy === "ffmpeg" ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}
+                下载到应用
+              </button>
             </div>
           </section>
 
-          {(busy === "engine" || busy === "model" || busy === "aligner") && progress && (
+          {(busy === "engine" || busy === "model" || busy === "aligner" || busy === "ffmpeg") && progress && (
             <div className="download-progress" role="status">
               <span>{progress.message}</span><strong>{progress.percent}%</strong>
               <div><span style={{ width: `${progress.percent}%` }} /></div>

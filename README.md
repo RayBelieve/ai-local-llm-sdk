@@ -5,7 +5,7 @@
 
 ## 运行
 
-开发环境：Node.js 20+、Rust stable、Tauri 2 所需系统构建工具、FFmpeg（加入 PATH 或在界面中指定路径）。
+开发环境：Node.js 20+、Rust stable、Tauri 2 所需系统构建工具。FFmpeg 可从资源页按需安装，也可加入 PATH 或指定本机路径。
 
 ```powershell
 npm install
@@ -47,8 +47,8 @@ Large V3 Turbo 和 Large V2；每个下载项均有固定大小与 SHA-256 校�
 Tauri 命令 `get_resource_status` 返回系统自检、引擎和模型清单、已安装路径、适用性、
 推荐引擎、当前选择及 `ready` 状态。显卡由 Windows CIM 枚举，NVIDIA 驱动版本由
 `nvidia-smi` 读取；驱动版本未知时推荐 Vulkan。状态中还包括资源目录及旧资源迁移入口。
-FFmpeg 从 PATH 检测，也可通过
-`set_ffmpeg_path({ path })` 登记本机路径，传入 `null` 恢复 PATH。
+FFmpeg 可从「共享组件」下载到 `resources/tools/ffmpeg/`，安装后自动选用；也可通过
+`set_ffmpeg_path({ path })` 登记本机路径，传入 `null` 恢复 PATH。自动安装支持 Windows x86-64、macOS x86-64/ARM64 和 Linux x86-64/ARM64，下载固定的 `imageio-ffmpeg 0.6.0` 平台包并校验 SHA-256；当前仅在 Windows 实测。
 
 - `download_engine_variant({ engineId })`、`download_model_variant({ modelId, mirror })`：按 ID 下载，不修改当前选择。
 - `register_local_engine({ engineId, path })`、`register_local_model({ modelId, path })`：登记本机已有文件；模型登记时验证完整 SHA-256。
@@ -69,7 +69,7 @@ Windows 上已验证 CrispASR + Qwen3-ASR 1.7B Q4：同一 90 秒视频关闭对
 
 ## 下一步
 
-补齐 FFmpeg 的按需安装；为 macOS 接入支持 Metal 的本地引擎；
+为 macOS 接入支持 Metal 的本地引擎；
 给运行时下载增加 SHA-256 校验；再扩展翻译 provider。云端模型接入保留在同一能力
 边界内，不影响字幕编辑和导出。
 
@@ -78,6 +78,7 @@ Windows 上已验证 CrispASR + Qwen3-ASR 1.7B Q4：同一 90 秒视频关闭对
 - [CrispASR](https://github.com/CrispStrobe/CrispASR)
 - [Whisper GGML 模型](https://huggingface.co/ggerganov/whisper.cpp)
 - [FFmpeg](https://ffmpeg.org/)
+- [imageio-ffmpeg](https://pypi.org/project/imageio-ffmpeg/)（按需下载的平台二进制来源）
 - STTMiniTool（OpenVINO 处理器参考，MIT；项目副本许可见上述路径）
 - [Silero VAD](https://github.com/snakers4/silero-vad)
 - [OpenVINO](https://github.com/openvinotoolkit/openvino)

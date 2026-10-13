@@ -7,6 +7,7 @@
 - `speech-to-text`: CrispASR with Whisper GGML or Qwen3-ASR 1.7B GGUF models (Q4/Q8, standard/Japanese anime), and OpenVINO CPU with Qwen3-ASR 0.6B INT8.
 - Windows x86-64: automatic installation for the listed engines and models.
 - Other platforms: local registration when a compatible runtime is available. MLX is not implemented yet.
+- `install_ffmpeg(&task)` downloads and verifies a platform binary on Windows x86-64, macOS x86-64/ARM64, or Linux x86-64/ARM64. The returned path can be passed to `transcribe_with_options`; the SDK never bundles FFmpeg.
 
 The bundled OpenVINO Python worker and its small preprocessing data are adapter code. The Qwen weights, Silero VAD ONNX weights, and Qwen3 ForcedAligner GGUF weights are downloaded or imported from local files. VAD and ForcedAligner weights are fetched on first use when their respective inference paths need them.
 
@@ -40,4 +41,4 @@ The SDK writes `sdk-resources.json` under the chosen storage directory. It impor
 
 ## Checks
 
-Run `cargo test --manifest-path crates/model-sdk/Cargo.toml` from the repository root. The ignored `tests/smoke.rs` test runs an installed engine against speech audio when `MODEL_SDK_SMOKE_ROOT`, `MODEL_SDK_SMOKE_AUDIO`, `MODEL_SDK_SMOKE_ENGINE`, and `MODEL_SDK_SMOKE_MODEL` are set. The ignored VAD test downloads and verifies the tagged Silero weight.
+Run `cargo test --manifest-path crates/model-sdk/Cargo.toml` from the repository root. The ignored `tests/smoke.rs` test runs an installed engine against speech audio when `MODEL_SDK_SMOKE_ROOT`, `MODEL_SDK_SMOKE_AUDIO`, `MODEL_SDK_SMOKE_ENGINE`, and `MODEL_SDK_SMOKE_MODEL` are set. The ignored VAD and FFmpeg tests download and verify their pinned resources.
