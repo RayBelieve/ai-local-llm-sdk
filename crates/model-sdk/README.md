@@ -5,6 +5,7 @@
 ## Current capabilities
 
 - `speech-to-text`: CrispASR with Whisper GGML or Qwen3-ASR 1.7B GGUF models (Q4/Q8, standard/Japanese anime), and OpenVINO CPU with Qwen3-ASR 0.6B INT8.
+- `text-generation`: llama.cpp server with a downloaded or locally registered GGUF text model on Windows x86-64. One `ModelSdk` instance reuses its loopback server for the same engine/model pair and stops it when dropped or cancelled.
 - Windows x86-64: automatic installation for the listed engines and models.
 - Other platforms: local registration when a compatible runtime is available. MLX is not implemented yet.
 - `install_ffmpeg(&task)` downloads and verifies a platform binary on Windows x86-64, macOS x86-64/ARM64, or Linux x86-64/ARM64. The returned path can be passed to `transcribe_with_options`; the SDK never bundles FFmpeg.
@@ -35,10 +36,44 @@ if ready.ready {
 }
 ```
 
-Use `download_engine` and `download_model` for catalog resources, or `register_local_engine` and `register_local_model` for existing files. `register_local_vad_model` and `register_local_aligner_model` import optional weights for offline use. Local model registration takes a `ModelDescriptor`; a new model using a supported format can be registered without changing the SDK. `transcribe` retains the default aligned/automatic-language behavior; `transcribe_with_options` accepts `align_timestamps` and an optional language code (`zh`, `en`, `ja`, `ko`, `yue`, `fr`, `de`, `es`, `pt`, `ru`, `ar`, `th`, `vi`, `id`, `ms`). Disabling alignment returns one segment containing the complete transcript. CrispASR selects the Qwen3 backend for `.gguf` files and loads the Q5 ForcedAligner only when alignment is enabled. A new engine or model format needs an adapter implementation. `TaskControl::cancel()` stops an active child process and download loops.
+Use `download_engine` and `download_model` for catalog resources, or `register_local_engine` and `register_local_model` for existing files. `register_local_vad_model` and `register_local_aligner_model` import optional weights for offline use. Local model registration takes a `ModelDescriptor`; a new model using a supported format can be registered without changing the SDK. `validate_pair` checks engine/model compatibility without requiring installation; `validate_pair_for` also requires a specific capability. `models()` includes registered custom models. `transcribe` retains the default aligned/automatic-language behavior; `transcribe_with_options` accepts `align_timestamps` and an optional language code (`zh`, `en`, `ja`, `ko`, `yue`, `fr`, `de`, `es`, `pt`, `ru`, `ar`, `th`, `vi`, `id`, `ms`). Disabling alignment returns one segment containing the complete transcript. CrispASR selects the Qwen3 backend for `.gguf` files and loads the Q5 ForcedAligner only when alignment is enabled. A new engine or model format needs an adapter implementation. `TaskControl::cancel()` stops an active child process and download loops.
+
+For llama.cpp, call `llama_download_options()` to inspect CPU, Vulkan, CUDA 12.4, and CUDA 13.3 suitability and recommendation. `download_engine(LLAMA_ENGINE_ID, &task)` installs the recommended `b9500` runtime; `download_llama_engine(variant_id, &task)` installs a selected suitable variant, including its DLLs. `download_model(HY_MT_MODEL_ID, mirror, &task)` installs the pinned HY-MT1.5-1.8B Q4_K_M translation GGUF with size and SHA-256 verification. Existing local `llama-server.exe` and GGUF files may still be registered. The engine ZIPs have pinned sizes and are validated by extraction and an executable version check, but do not yet have pinned SHA-256 values. The SDK chooses a 2048-16384 token context from available RAM or, when CUDA is selected, free VRAM and model size. CUDA and Vulkan GPU loads fall back to CPU on failure. Generation accepts 1-1024 output tokens and checks the message token budget before generation. Calls on one SDK instance reuse the server until the engine/model changes, `stop_text_generation()` is called, or the instance is dropped. Each call is stateless: pass prior messages again on subsequent turns.
+
+```rust
+use model_sdk::{ModelSdk, LLAMA_ENGINE_ID, task::TaskControl, resources::HY_MT_MODEL_ID};
+
+let sdk = ModelSdk::new("app-resources")?;
+let task = TaskControl::default();
+sdk.download_engine(LLAMA_ENGINE_ID, &task)?;
+sdk.download_model(HY_MT_MODEL_ID, false, &task)?;
+let answer = sdk.generate_text(LLAMA_ENGINE_ID, HY_MT_MODEL_ID, "Translate into English: 你好", 128, &task)?;
+```
+
+For multi-turn generation, pass the full conversation in order. `GenerationOptions` supports `temperature`, `top_p`, `top_k`, `min_p`, `repeat_penalty`, and `seed`; omitted fields use llama.cpp defaults. The streaming callback runs on the calling thread; the method also returns the complete text on success. A callback may have received partial text before an error. Cancellation returns an error and stops the active server.
+
+```rust
+use model_sdk::{ChatMessage, ChatRole, GenerationOptions};
+
+let messages = vec![
+    ChatMessage { role: ChatRole::System, content: "Be concise.".into() },
+    ChatMessage { role: ChatRole::User, content: "Hello".into() },
+];
+let options = GenerationOptions {
+    max_tokens: 128,
+    temperature: Some(0.7),
+    top_p: Some(0.9),
+    ..GenerationOptions::default()
+};
+let answer = sdk.generate_chat_stream(
+    LLAMA_ENGINE_ID, "local-text", &messages, &options, &TaskControl::default(),
+    |delta| print!("{delta}"),
+)?;
+```
 
 The SDK writes `sdk-resources.json` under the chosen storage directory. It imports existing `enginePaths` and `modelPaths` from the subtitle workbench's `resources.json` without moving resource files. The workbench retains its engine/model selection and FFmpeg preference in `resources.json`.
 
 ## Checks
 
 Run `cargo test --manifest-path crates/model-sdk/Cargo.toml` from the repository root. The ignored `tests/smoke.rs` test runs an installed engine against speech audio when `MODEL_SDK_SMOKE_ROOT`, `MODEL_SDK_SMOKE_AUDIO`, `MODEL_SDK_SMOKE_ENGINE`, and `MODEL_SDK_SMOKE_MODEL` are set. The ignored VAD and FFmpeg tests download and verify their pinned resources.
+The ignored `generates_with_local_llama_server` smoke test uses `MODEL_SDK_LLAMA_ENGINE` and `MODEL_SDK_LLAMA_MODEL` to load a real local text model.

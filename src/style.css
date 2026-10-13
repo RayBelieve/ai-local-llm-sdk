@@ -80,6 +80,15 @@ textarea:focus-visible {
   align-items: center;
   gap: 10px;
 }
+.export-mode {
+  height: 36px;
+  border: 1px solid #d7dfdc;
+  border-radius: 6px;
+  background: #fff;
+  color: #293a34;
+  padding: 0 7px;
+  font-size: 12px;
+}
 .platform-chip {
   font-size: 12px;
   color: #70807a;
@@ -420,8 +429,35 @@ textarea:focus-visible {
 }
 .transcript-heading {
   padding: 24px 24px 0;
-  height: 58px;
+  min-height: 58px;
+  height: auto;
   margin: 0;
+}
+.transcript-heading > .subtitle-heading-actions {
+  gap: 8px;
+  flex: none;
+}
+.subtitle-heading-actions .button {
+  height: 30px;
+  padding: 0 9px;
+}
+.translation-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: #657d72;
+  font-size: 11px;
+}
+.translation-target select {
+  width: 104px;
+  height: 30px;
+  border: 1px solid #d7dfdc;
+  border-radius: 5px;
+  background: #fff;
+  color: #293a34;
+  padding: 0 5px;
+  font-size: 11px;
 }
 .transcript-heading .count {
   min-width: 24px;
@@ -523,6 +559,20 @@ textarea:focus-visible {
 }
 .row-main textarea:focus {
   outline: none;
+}
+.translation-line {
+  border-top: 1px solid #dfe9ed;
+  margin-top: 11px;
+  padding-top: 9px;
+}
+.translation-line span {
+  display: block;
+  color: #52748a;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.translation-line textarea {
+  color: #2a485b;
 }
 .delete-button {
   opacity: 0;
@@ -632,7 +682,12 @@ textarea:focus-visible {
     padding: 18px 15px;
   }
   .transcript-heading {
-    padding: 18px 15px 0;
+    padding: 18px 15px 10px;
+    flex-wrap: wrap;
+  }
+  .subtitle-heading-actions {
+    width: 100%;
+    justify-content: space-between;
   }
   .resource-row {
     flex-wrap: wrap;
@@ -1030,6 +1085,9 @@ textarea:focus-visible {
   color: #293a34;
   padding: 0 8px;
 }
+.translation-model-select {
+  margin-top: 16px;
+}
 @media (max-width: 1050px) {
   .left-pane { overflow: visible; }
   .resource-panel { overflow: visible; }
@@ -1042,4 +1100,6 @@ textarea:focus-visible {
   .resource-controls { justify-content: flex-start; }
   .active-resource-line { grid-template-columns: 72px minmax(0, 1fr) 45px; }
   .transcription-options { flex-wrap: wrap; }
+  .platform-chip { display: none; }
+  .top-actions { flex-wrap: wrap; }
 }

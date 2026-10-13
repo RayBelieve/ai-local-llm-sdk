@@ -11,6 +11,7 @@ import {
   FileVideo,
   FolderOpen,
   LoaderCircle,
+  Languages,
   Play,
   Plus,
   Scissors,
@@ -21,7 +22,7 @@ import {
 import ResourcePanel, { type Progress, type ResourceStatus } from "./ResourcePanel";
 import "./style.css";
 
-type Segment = { start: number; end: number; text: string };
+type Segment = { start: number; end: number; text: string; translation?: string };
 
 const languages = [
   ["zh", "中文"], ["en", "English"], ["ja", "日本語"], ["ko", "한국어"],
@@ -66,15 +67,18 @@ function App() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [alignTimestamps, setAlignTimestamps] = useState(true);
   const [language, setLanguage] = useState("");
+  const [targetLanguage, setTargetLanguage] = useState("en");
+  const [translatedLanguage, setTranslatedLanguage] = useState("");
+  const [exportMode, setExportMode] = useState<"source" | "translation">("source");
 
   useEffect(() => {
     if (!desktop) return;
     invoke<ResourceStatus>("get_resource_status")
       .then(setResources)
       .catch((reason) => setError(String(reason)));
-    const pending = listen<Progress>("task-progress", (event) =>
-      setProgress(event.payload),
-    );
+    const pending = listen<Progress>("task-progress", (event) => {
+      if (event.payload.stage !== "generate") setProgress(event.payload);
+    });
     return () => {
       void pending.then((unlisten) => unlisten());
     };
@@ -116,11 +120,15 @@ function App() {
   const ready = Boolean(mediaPath && resources?.ready);
   const selectedEngine = resources?.engines.find((item) => item.id === resources.selectedEngineId);
   const selectedModel = resources?.models.find((item) => item.id === resources.selectedModelId);
+  const translationModel = resources?.models.find((item) => item.id === resources.selectedTranslationModelId);
+  const translationComplete = Boolean(segments.length && translatedLanguage && segments.every((segment) => segment.translation?.trim()));
 
   function updateResources(next: ResourceStatus) {
     if (resources && (resources.selectedEngineId !== next.selectedEngineId || resources.selectedModelId !== next.selectedModelId)) {
       setSegments([]);
       setLastRun("");
+      setTranslatedLanguage("");
+      setExportMode("source");
     }
     setResources(next);
   }
@@ -153,6 +161,8 @@ function App() {
         setPreviewFailed(false);
         setSegments([]);
         setLastRun("");
+        setTranslatedLanguage("");
+        setExportMode("source");
         setError("");
         setNotice("");
         setView("transcribe");
@@ -173,6 +183,8 @@ function App() {
         mediaPath, alignTimestamps, language: language || null,
       });
       setSegments(result);
+      setTranslatedLanguage("");
+      setExportMode("source");
       setResultAligned(alignTimestamps);
       setLastRun(`${selectedModel?.label || resources?.selectedModelId} / ${selectedEngine?.label || resources?.selectedEngineId} / ${alignTimestamps ? "时间轴" : "全文"} / ${languages.find(([code]) => code === language)?.[1] || "自动"}`);
       setSelected(0);
@@ -188,16 +200,41 @@ function App() {
     await invoke("cancel_transcription");
   }
 
+  async function translate() {
+    if (!segments.length || !resources?.translationReady || !resources.selectedTranslationModelId) return;
+    setBusy("translate");
+    setProgress(null);
+    setError("");
+    setNotice("");
+    try {
+      const result = await invoke<Segment[]>("translate_subtitles", {
+        segments: segments.map(({ start, end, text }) => ({ start, end, text })),
+        modelId: resources.selectedTranslationModelId,
+        targetLanguage,
+      });
+      if (result.length !== segments.length) throw new Error("翻译结果与字幕数量不一致。");
+      setSegments((current) => current.map((segment, index) => ({ ...segment, translation: result[index].text })));
+      setTranslatedLanguage(targetLanguage);
+      setExportMode("translation");
+      setNotice(`已翻译 ${result.length} 条字幕`);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function exportFile() {
     if (!segments.length) return;
-    const initial = mediaPath.replace(/\.[^.\\/]+$/, "") + ".srt";
+    if (exportMode === "translation" && !translationComplete) return;
+    const initial = mediaPath.replace(/\.[^.\\/]+$/, "") + (exportMode === "translation" ? `.${translatedLanguage}.srt` : ".srt");
     const path = await save({
       defaultPath: initial,
       filters: [{ name: "SubRip 字幕", extensions: ["srt"] }],
     });
     if (!path) return;
     try {
-      await invoke("export_srt", { path, segments });
+      await invoke("export_srt", { path, segments: segments.map(({ start, end, text, translation }) => ({ start, end, text: exportMode === "translation" ? translation : text })) });
       setNotice(`已导出 ${fileName(path)}`);
       setError("");
     } catch (reason) {
@@ -207,7 +244,7 @@ function App() {
 
   function updateSegment(index: number, patch: Partial<Segment>) {
     setSegments((current) =>
-      current.map((item, i) => (i === index ? { ...item, ...patch } : item)),
+      current.map((item, i) => (i === index ? { ...item, ...patch, translation: patch.text !== undefined && patch.text !== item.text ? undefined : item.translation } : item)),
     );
   }
 
@@ -246,13 +283,17 @@ function App() {
             <FolderOpen size={17} />
             导入音视频
           </button>
+          <select className="export-mode" aria-label="导出内容" value={exportMode} disabled={Boolean(busy)} onChange={(event) => setExportMode(event.target.value as "source" | "translation")}>
+            <option value="source">原文 SRT</option>
+            <option value="translation" disabled={!translationComplete}>译文 SRT</option>
+          </select>
           <button
             className="button button-primary"
             onClick={exportFile}
-            disabled={!segments.length || Boolean(busy)}
+            disabled={!segments.length || Boolean(busy) || (exportMode === "translation" && !translationComplete)}
           >
             <FileDown size={17} />
-            导出 SRT
+            导出
           </button>
         </div>
       </header>
@@ -300,6 +341,7 @@ function App() {
                 <div className="section-heading"><h2>当前资源</h2><button className="text-action" onClick={() => setView("resources")}>配置资源</button></div>
                 <div className="active-resource-line"><span>推理引擎</span><strong>{selectedEngine?.label || "未选择"}</strong><small>{selectedEngine?.installedPath ? "已安装" : "未安装"}</small></div>
                 <div className="active-resource-line"><span>转写模型</span><strong>{selectedModel?.label || "未选择"}</strong><small>{selectedModel?.installedPath ? "已安装" : "未安装"}</small></div>
+                <div className="active-resource-line"><span>翻译模型</span><strong>{translationModel?.label || "未登记"}</strong><small>{resources?.translationReady ? "可用" : "未就绪"}</small></div>
                 <div className="active-resource-line"><span>FFmpeg</span><strong>{resources?.system.ffmpegAvailable ? "可用" : "缺失"}</strong></div>
               </div>
               <div className="transcription-options">
@@ -339,15 +381,30 @@ function App() {
               <h2>{segments.length && !resultAligned ? "转录全文" : "字幕"}</h2>
               {resultAligned && <span className="count">{segments.length}</span>}
             </div>
-            <button
-              className="icon-button"
-              title="添加字幕行"
-              aria-label="添加字幕行"
-              onClick={addSegment}
-              disabled={!segments.length || !resultAligned || Boolean(busy)}
-            >
-              <Plus size={18} />
-            </button>
+            <div className="subtitle-heading-actions">
+              <label className="translation-target">
+                翻译为
+                <select value={targetLanguage} disabled={Boolean(busy)} onChange={(event) => setTargetLanguage(event.target.value)}>
+                  {languages.map(([code, name]) => <option value={code} key={code}>{name}</option>)}
+                </select>
+              </label>
+              {busy === "translate" ? (
+                <button className="button button-stop" onClick={cancel}><Square size={15} />取消</button>
+              ) : (
+                <button className="button" onClick={translate} disabled={!segments.length || !resources?.translationReady || Boolean(busy)} title={!resources?.translationReady ? resources?.translationReason || "请先配置翻译资源" : undefined}>
+                  <Languages size={16} />翻译
+                </button>
+              )}
+              <button
+                className="icon-button"
+                title="添加字幕行"
+                aria-label="添加字幕行"
+                onClick={addSegment}
+                disabled={!segments.length || !resultAligned || Boolean(busy)}
+              >
+                <Plus size={18} />
+              </button>
+            </div>
           </div>
           <div className="transcript-body">
             {segments.length ? (
@@ -362,6 +419,7 @@ function App() {
                     {resultAligned && <div className="time-line">
                       <input
                         aria-label={`第 ${index + 1} 行开始时间`}
+                        disabled={Boolean(busy)}
                         defaultValue={displayTime(segment.start)}
                         key={`start-${index}-${segment.start}`}
                         onBlur={(event) => {
@@ -374,6 +432,7 @@ function App() {
                       <span>至</span>
                       <input
                         aria-label={`第 ${index + 1} 行结束时间`}
+                        disabled={Boolean(busy)}
                         defaultValue={displayTime(segment.end)}
                         key={`end-${index}-${segment.end}`}
                         onBlur={(event) => {
@@ -386,17 +445,29 @@ function App() {
                     </div>}
                     <textarea
                       aria-label={resultAligned ? `第 ${index + 1} 行字幕` : "转录全文"}
+                      disabled={Boolean(busy)}
                       value={segment.text}
                       onChange={(event) =>
                         updateSegment(index, { text: event.target.value })
                       }
                       rows={resultAligned ? 2 : 18}
                     />
+                    {translatedLanguage && <div className="translation-line">
+                      <span>译文 · {languages.find(([code]) => code === translatedLanguage)?.[1]}</span>
+                      <textarea
+                        aria-label={`第 ${index + 1} 行译文`}
+                        value={segment.translation || ""}
+                        disabled={Boolean(busy)}
+                        onChange={(event) => setSegments((current) => current.map((item, i) => i === index ? { ...item, translation: event.target.value } : item))}
+                        rows={resultAligned ? 2 : 8}
+                      />
+                    </div>}
                   </div>
                   {resultAligned && <button
                     className="icon-button delete-button"
                     title="删除字幕行"
                     aria-label={`删除第 ${index + 1} 行`}
+                    disabled={Boolean(busy)}
                     onClick={(event) => {
                       event.stopPropagation();
                       setSegments((current) =>
@@ -418,9 +489,8 @@ function App() {
           </div>
           <div className="transcript-footer">
             <span>
-              {segments.length
-                ? lastRun
-                : "支持逐条校对与导出"}
+              {busy === "translate" ? `${progress?.message || "正在准备翻译"}${progress ? ` · ${progress.percent}%` : ""}`
+                : segments.length ? lastRun : "支持逐条校对与导出"}
             </span>
             <span>
               {segments.length

@@ -2,6 +2,7 @@ use std::{
     fs::{self, File},
     path::Path,
     process::Stdio,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use crate::{
@@ -13,6 +14,8 @@ use crate::{
     subtitle::Segment,
     task::TaskControl,
 };
+
+static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
 pub struct TranscriptionOptions {
@@ -155,19 +158,23 @@ impl ModelSdk {
         if (openvino && !model.is_dir()) || (!openvino && !model.is_file()) {
             return Err(format!("找不到模型: {}", model.display()));
         }
-        let work_dir = self.root().join("jobs");
-        fs::create_dir_all(&work_dir).map_err(|error| error.to_string())?;
+        let jobs_dir = self.root().join("jobs");
+        fs::create_dir_all(&jobs_dir).map_err(|error| error.to_string())?;
         let job_id = format!(
-            "job-{}",
+            "job-{}-{}-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|error| error.to_string())?
-                .as_nanos()
+                .as_nanos(),
+            std::process::id(),
+            NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed)
         );
-        let wav = work_dir.join(format!("{job_id}.wav"));
-        let output_base = work_dir.join(job_id);
+        let job_dir = jobs_dir.join(job_id);
+        fs::create_dir(&job_dir).map_err(|error| error.to_string())?;
+        let wav = job_dir.join("audio.wav");
+        let output_base = job_dir.join("result");
         task.progress("prepare", 0, "正在提取音频");
-        let ffmpeg_log = work_dir.join("ffmpeg.log");
+        let ffmpeg_log = job_dir.join("ffmpeg.log");
         let mut ffmpeg = hidden_command(ffmpeg_path);
         ffmpeg
             .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
@@ -242,7 +249,7 @@ impl ModelSdk {
 
 #[cfg(test)]
 mod tests {
-    use super::language_name;
+    use super::*;
 
     #[test]
     fn language_codes_are_validated_before_inference() {
@@ -250,5 +257,53 @@ mod tests {
         assert_eq!(language_name(Some("zh")).unwrap(), Some("Chinese"));
         assert_eq!(language_name(Some("yue")).unwrap(), Some("Cantonese"));
         assert!(language_name(Some("invalid")).is_err());
+    }
+
+    #[test]
+    fn concurrent_transcriptions_keep_job_files_separate() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("model-sdk-jobs-{}-{nonce}", std::process::id()));
+        let sdk = ModelSdk::new(&root).unwrap();
+        let media = root.join("media.wav");
+        let engine = root.join("engine.exe");
+        let model = root.join("model.bin");
+        for path in [&media, &engine, &model] {
+            fs::write(path, b"test").unwrap();
+        }
+        std::thread::scope(|scope| {
+            let jobs: Vec<_> = (0..2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        assert!(sdk
+                            .transcribe_paths_with_options(
+                                &media,
+                                &engine,
+                                &model,
+                                &root.join("missing-ffmpeg"),
+                                "cpu",
+                                false,
+                                false,
+                                &TranscriptionOptions::default(),
+                                &TaskControl::default(),
+                            )
+                            .is_err());
+                    })
+                })
+                .collect();
+            for job in jobs {
+                job.join().unwrap();
+            }
+        });
+        let job_dirs: Vec<_> = fs::read_dir(root.join("jobs"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(job_dirs.len(), 2);
+        assert!(job_dirs.iter().all(|dir| dir.join("ffmpeg.log").is_file()));
+        fs::remove_dir_all(root).unwrap();
     }
 }

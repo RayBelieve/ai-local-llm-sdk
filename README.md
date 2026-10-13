@@ -1,6 +1,6 @@
 # 字幕工作台（最小闭环）
 
-导入音视频，使用本地 CrispASR + Whisper/Qwen3-ASR 或 OpenVINO + Qwen3-ASR 转写，校对时间与文字，导出 SRT。
+导入音视频，使用本地 CrispASR + Whisper/Qwen3-ASR 或 OpenVINO + Qwen3-ASR 转写，校对时间与文字；可用 llama.cpp 和 HY-MT 翻译 GGUF 逐条翻译字幕，分别导出原文或译文 SRT。
 界面和任务逻辑是新实现。独立 Rust SDK 位于 `crates/model-sdk/`，当前桌面应用是它的第一个调用方。OpenVINO worker 复用了 STTMiniTool 的 MIT 许可 NumPy 处理器和小型预处理文件，许可文本见 `crates/model-sdk/workers/openvino/LICENSE-STTMiniTool`。
 
 ## 运行
@@ -13,8 +13,7 @@ npm run tauri dev
 ```
 
 当前界面的「资源与设备」页可查看系统自检、选择 CrispASR 或 OpenVINO 运行时与对应模型、
-下载或登记本机文件，以及指定 FFmpeg 路径。「转写测试」页使用当前已保存的资源选择
-运行转写。也可以登记已有的 `crispasr.exe` 与目录内列出的 GGML Whisper 模型。
+下载或登记本机文件，以及指定 FFmpeg 路径。字幕翻译区按硬件推荐 llama.cpp CPU、Vulkan 或 CUDA 版本，支持下载完整运行时与 HY-MT1.5-1.8B Q4_K_M GGUF，也可登记已有的 `llama-server.exe` 和翻译 GGUF；「转写测试」页可选择目标语言并翻译已转写的字幕，原文和译文分别编辑与导出。
 模型、推理引擎和转写临时文件存放在 EXE 旁的 `resources/` 目录，
 不随界面安装包分发；请将程序放在可写目录，不要放在受保护的系统安装目录。
 macOS 使用 `.app` 所在目录旁的 `resources/`。旧版已下载到用户本地数据目录的资源，
@@ -55,9 +54,12 @@ FFmpeg 可从「共享组件」下载到 `resources/tools/ffmpeg/`，安装后�
 `set_ffmpeg_path({ path })` 登记本机路径，传入 `null` 恢复 PATH。自动安装支持 Windows x86-64、macOS x86-64/ARM64 和 Linux x86-64/ARM64，下载固定的 `imageio-ffmpeg 0.6.0` 平台包并校验 SHA-256；当前仅在 Windows 实测。
 
 - `download_engine_variant({ engineId })`、`download_model_variant({ modelId, mirror })`：按 ID 下载，不修改当前选择。
+- `download_llama_variant({ variantId })`：下载适配当前硬件的 llama.cpp 运行时（包含依赖 DLL）；`download_model_variant` 可使用模型 ID `hy-mt-1.5-1.8b-q4`。
 - `register_local_engine({ engineId, path })`、`register_local_model({ modelId, path })`：登记本机已有文件；模型登记时验证完整 SHA-256。
 - `select_resources({ engineId, modelId })`：保存选择，允许先选后装；返回新的资源状态。
 - `transcribe_selected({ mediaPath, alignTimestamps?, language? })`：检查所选资源是否就绪，再按本次选项执行转写；语言使用 `zh`、`en` 等代码，省略时自动识别。
+- `register_translation_model({ path })`、`select_translation_model({ modelId })`：登记或选择本机翻译 GGUF。
+- `translate_subtitles({ segments, modelId, targetLanguage })`：用已登记的 llama.cpp 模型逐条翻译，返回保持原时间轴的字幕；可用现有取消命令停止。
 
 旧的 `get_environment`、`download_engine`、`download_model`、`transcribe` 命令保留兼容。
 旧版下载命令会同步更新选择；原有 `engines/crispasr` 目录仍可识别。
@@ -67,14 +69,15 @@ macOS 可登记已装好这些 Python 依赖的 `python`/`python3` 和模型目�
 
 ## 阶段验收（2026-10-12）
 
-Windows 上已验证 CrispASR + Qwen3-ASR 1.7B Q4：同一 90 秒视频关闭对齐返回一段全文，开启对齐得到 49 条字幕；SDK Rust 测试和 OpenVINO worker 单元测试通过。SDK 与 Tauri 分层可继续使用，目前仍只实现语音转写能力。
+Windows 上已验证 CrispASR + Qwen3-ASR 1.7B Q4：同一 90 秒视频关闭对齐返回一段全文，开启对齐得到 49 条字幕；SDK Rust 测试和 OpenVINO worker 单元测试通过。
+2026-10-13 使用已有的 HY-MT1.5-1.8B Q4 GGUF 和 llama-server.exe 实测两条中译英字幕，译文与原文时间轴一致；桌面界面中的完整操作流程仍需实机验收。
 跨平台构建和 macOS 推理尚未验证；OpenVINO 仍使用估算的句级时间，CrispASR 引擎压缩包尚无固定哈希。
 开发资源和可直接运行的 Release EXE 位于仓库外的 `../LLM-local-runtime/`（`resources/` 与 EXE 同级），旧版 EXE 保存在其 `portable-archive/`。重新执行 `npm run tauri dev` 会生成新的 EXE 和空资源目录；可在「资源与设备」页登记仓库外已有的引擎与模型文件。
 
 ## 下一步
 
 为 macOS 接入支持 Metal 的本地引擎；
-给运行时下载增加 SHA-256 校验；再扩展翻译 provider。云端模型接入保留在同一能力
+给运行时下载增加 SHA-256 校验；云端模型接入保留在同一能力
 边界内，不影响字幕编辑和导出。
 
 ## 上游资源
