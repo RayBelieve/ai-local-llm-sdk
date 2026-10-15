@@ -1,8 +1,10 @@
 use model_sdk::{
     subtitle::{write_srt, Segment},
     task::TaskControl,
-    ChatMessage, ChatRole, GenerationOptions, ModelSdk, LLAMA_ENGINE_ID,
+    ChatMessage, ChatRole, GenerationOptions, ModelSdk,
 };
+#[cfg(test)]
+const LLAMA_ENGINE_ID: &str = "llama-cpu";
 
 fn language_name(code: &str) -> Option<&'static str> {
     match code {
@@ -27,6 +29,7 @@ fn language_name(code: &str) -> Option<&'static str> {
 
 pub(crate) fn translate_segments(
     sdk: &ModelSdk,
+    engine_id: &str,
     model_id: &str,
     target_language: &str,
     segments: &[Segment],
@@ -57,7 +60,7 @@ pub(crate) fn translate_segments(
             .join(" ");
         let prompt = translation_prompt(&segment.text, target, &previous, target_language == "zh");
         let mut text = sdk.generate_chat(
-            LLAMA_ENGINE_ID,
+            engine_id,
             model_id,
             &[ChatMessage {
                 role: ChatRole::User,
@@ -69,7 +72,7 @@ pub(crate) fn translate_segments(
         if !looks_like_target(&text, target_language) {
             let retry = format!("Translate this text into {target}. Output {target} only; do not repeat or paraphrase the source text.\nText: {}", segment.text);
             text = sdk.generate_chat(
-                LLAMA_ENGINE_ID,
+                engine_id,
                 model_id,
                 &[ChatMessage {
                     role: ChatRole::User,
@@ -179,16 +182,8 @@ mod tests {
         let sdk = ModelSdk::new(&root).unwrap();
         sdk.register_local_engine(LLAMA_ENGINE_ID, Path::new(&engine))
             .unwrap();
-        sdk.register_local_model(
-            model_sdk::ModelDescriptor {
-                id: "translation-test".into(),
-                label: "Translation test".into(),
-                format: "llama-gguf".into(),
-                capabilities: vec![model_sdk::TEXT_GENERATION.into()],
-            },
-            Path::new(&model),
-        )
-        .unwrap();
+        sdk.register_local_model(model_sdk::resources::HY_MT_MODEL_ID, Path::new(&model))
+            .unwrap();
         let source = vec![
             Segment {
                 start: 0.0,
@@ -203,7 +198,8 @@ mod tests {
         ];
         let translated = translate_segments(
             &sdk,
-            "translation-test",
+            LLAMA_ENGINE_ID,
+            model_sdk::resources::HY_MT_MODEL_ID,
             "en",
             &source,
             &TaskControl::default(),

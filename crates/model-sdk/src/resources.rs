@@ -8,6 +8,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::catalog::{ArtifactFormat, ModelProfile, TaskKind};
+
 pub const ENGINE_VERSION: &str = "v0.8.33";
 pub const LLAMA_ENGINE_VERSION: &str = "b9500";
 pub const HY_MT_MODEL_ID: &str = "hy-mt-1.5-1.8b-q4";
@@ -58,7 +60,7 @@ pub struct LlamaVariant {
 // shortcut: upstream release ZIPs have pinned sizes but no recorded SHA-256; pin digests before adding new versions.
 pub const LLAMA_VARIANTS: &[LlamaVariant] = &[
     LlamaVariant {
-        id: "cpu",
+        id: "llama-cpu",
         label: "CPU",
         assets: &[LlamaAsset {
             file: "llama-b9500-bin-win-cpu-x64.zip",
@@ -66,7 +68,7 @@ pub const LLAMA_VARIANTS: &[LlamaVariant] = &[
         }],
     },
     LlamaVariant {
-        id: "vulkan",
+        id: "llama-vulkan",
         label: "Vulkan",
         assets: &[LlamaAsset {
             file: "llama-b9500-bin-win-vulkan-x64.zip",
@@ -74,7 +76,7 @@ pub const LLAMA_VARIANTS: &[LlamaVariant] = &[
         }],
     },
     LlamaVariant {
-        id: "cuda12",
+        id: "llama-cuda12",
         label: "CUDA 12.4",
         assets: &[
             LlamaAsset {
@@ -88,7 +90,7 @@ pub const LLAMA_VARIANTS: &[LlamaVariant] = &[
         ],
     },
     LlamaVariant {
-        id: "cuda13",
+        id: "llama-cuda13",
         label: "CUDA 13.3",
         assets: &[
             LlamaAsset {
@@ -123,7 +125,7 @@ pub struct EngineSpec {
 
 pub const ENGINES: &[EngineSpec] = &[
     EngineSpec {
-        id: "vulkan",
+        id: "crispasr-vulkan",
         label: "Vulkan",
         asset: "crispasr-windows-x86_64-vulkan.zip",
         gpu_backend: "vulkan",
@@ -133,7 +135,7 @@ pub const ENGINES: &[EngineSpec] = &[
         min_compute_capability: None,
     },
     EngineSpec {
-        id: "cuda12",
+        id: "crispasr-cuda12",
         label: "CUDA 12",
         asset: "crispasr-windows-x86_64-cuda.zip",
         gpu_backend: "cuda",
@@ -143,7 +145,7 @@ pub const ENGINES: &[EngineSpec] = &[
         min_compute_capability: Some(50),
     },
     EngineSpec {
-        id: "cuda13",
+        id: "crispasr-cuda13",
         label: "CUDA 13",
         asset: "crispasr-windows-x86_64-cuda13.zip",
         gpu_backend: "cuda",
@@ -153,7 +155,7 @@ pub const ENGINES: &[EngineSpec] = &[
         min_compute_capability: Some(75),
     },
     EngineSpec {
-        id: "cpu",
+        id: "crispasr-cpu",
         label: "CPU",
         asset: "crispasr-windows-x86_64-cpu.zip",
         gpu_backend: "cpu",
@@ -163,7 +165,7 @@ pub const ENGINES: &[EngineSpec] = &[
         min_compute_capability: None,
     },
     EngineSpec {
-        id: "cpu-legacy",
+        id: "crispasr-cpu-legacy",
         label: "CPU 兼容版",
         asset: "crispasr-windows-x86_64-cpu-legacy.zip",
         gpu_backend: "cpu",
@@ -179,7 +181,9 @@ pub struct ModelSpec {
     pub label: &'static str,
     pub file: &'static str,
     pub repo: &'static str,
-    pub format: &'static str,
+    pub format: ArtifactFormat,
+    pub profile: ModelProfile,
+    pub task: TaskKind,
     pub size: u64,
     pub sha256: &'static str,
 }
@@ -191,7 +195,9 @@ pub const MODELS: &[ModelSpec] = &[
         label: "Whisper Tiny",
         file: "ggml-tiny.bin",
         repo: WHISPER_REPO,
-        format: "whisper-ggml",
+        format: ArtifactFormat::Ggml,
+        profile: ModelProfile::Whisper,
+        task: TaskKind::Transcription,
         size: 77_691_713,
         sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
     },
@@ -200,7 +206,9 @@ pub const MODELS: &[ModelSpec] = &[
         label: "Whisper Base",
         file: "ggml-base.bin",
         repo: WHISPER_REPO,
-        format: "whisper-ggml",
+        format: ArtifactFormat::Ggml,
+        profile: ModelProfile::Whisper,
+        task: TaskKind::Transcription,
         size: 147_951_465,
         sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
     },
@@ -209,7 +217,9 @@ pub const MODELS: &[ModelSpec] = &[
         label: "Whisper Small",
         file: "ggml-small.bin",
         repo: WHISPER_REPO,
-        format: "whisper-ggml",
+        format: ArtifactFormat::Ggml,
+        profile: ModelProfile::Whisper,
+        task: TaskKind::Transcription,
         size: 487_601_967,
         sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
     },
@@ -218,7 +228,9 @@ pub const MODELS: &[ModelSpec] = &[
         label: "Whisper Medium",
         file: "ggml-medium.bin",
         repo: WHISPER_REPO,
-        format: "whisper-ggml",
+        format: ArtifactFormat::Ggml,
+        profile: ModelProfile::Whisper,
+        task: TaskKind::Transcription,
         size: 1_533_763_059,
         sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
     },
@@ -227,7 +239,9 @@ pub const MODELS: &[ModelSpec] = &[
         label: "Whisper Large V3 Turbo",
         file: "ggml-large-v3-turbo.bin",
         repo: WHISPER_REPO,
-        format: "whisper-ggml",
+        format: ArtifactFormat::Ggml,
+        profile: ModelProfile::Whisper,
+        task: TaskKind::Transcription,
         size: 1_624_555_275,
         sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
     },
@@ -236,7 +250,9 @@ pub const MODELS: &[ModelSpec] = &[
         label: "Whisper Large V2",
         file: "ggml-large-v2.bin",
         repo: WHISPER_REPO,
-        format: "whisper-ggml",
+        format: ArtifactFormat::Ggml,
+        profile: ModelProfile::Whisper,
+        task: TaskKind::Transcription,
         size: 3_094_623_691,
         sha256: "9a423fe4d40c82774b6af34115b8b935f34152246eb19e80e376071d3f999487",
     },
@@ -245,7 +261,9 @@ pub const MODELS: &[ModelSpec] = &[
         label: "Qwen3-ASR 1.7B Q4",
         file: "qwen3-asr-1.7b-q4_k.gguf",
         repo: "cstr/qwen3-asr-1.7b-GGUF",
-        format: "qwen3-gguf",
+        format: ArtifactFormat::Gguf,
+        profile: ModelProfile::Qwen3Asr17b,
+        task: TaskKind::Transcription,
         size: 1_490_915_200,
         sha256: "ec197cef7ccc589fdcae1becc3f4a3de119d0a41e790b898b519b1a048dad8d4",
     },
@@ -254,7 +272,9 @@ pub const MODELS: &[ModelSpec] = &[
         label: "Qwen3-ASR 1.7B Q8",
         file: "qwen3-asr-1.7b-q8_0.gguf",
         repo: "cstr/qwen3-asr-1.7b-GGUF",
-        format: "qwen3-gguf",
+        format: ArtifactFormat::Gguf,
+        profile: ModelProfile::Qwen3Asr17b,
+        task: TaskKind::Transcription,
         size: 2_506_723_200,
         sha256: "9851ab996591a2d0cb0efb216002764b509c86bd40c95e613d7b65b8e69c8a6e",
     },
@@ -263,7 +283,9 @@ pub const MODELS: &[ModelSpec] = &[
         label: "Qwen3-ASR 1.7B 日语动漫 Q4",
         file: "qwen3-asr-1.7b-ja-anime-q4_k.gguf",
         repo: "cstr/qwen3-asr-1.7b-ja-anime-GGUF",
-        format: "qwen3-gguf",
+        format: ArtifactFormat::Gguf,
+        profile: ModelProfile::Qwen3Asr17b,
+        task: TaskKind::Transcription,
         size: 1_490_917_376,
         sha256: "da00cec556885a60d47234b4def0dbdd08394df4d4df13866d7cd9726c23ccd9",
     },
@@ -272,7 +294,9 @@ pub const MODELS: &[ModelSpec] = &[
         label: "Qwen3-ASR 1.7B 日语动漫 Q8",
         file: "qwen3-asr-1.7b-ja-anime-q8_0.gguf",
         repo: "cstr/qwen3-asr-1.7b-ja-anime-GGUF",
-        format: "qwen3-gguf",
+        format: ArtifactFormat::Gguf,
+        profile: ModelProfile::Qwen3Asr17b,
+        task: TaskKind::Transcription,
         size: 2_506_725_376,
         sha256: "f173ceddb15b59177575a101491862bd362cd85f2e7a6bac811fbc53411596a1",
     },
@@ -281,7 +305,9 @@ pub const MODELS: &[ModelSpec] = &[
         label: "HY-MT1.5 1.8B Q4_K_M",
         file: "HY-MT1.5-1.8B-Q4_K_M.gguf",
         repo: "tencent/HY-MT1.5-1.8B-GGUF",
-        format: "llama-gguf",
+        format: ArtifactFormat::Gguf,
+        profile: ModelProfile::HyMt15,
+        task: TaskKind::TextGeneration,
         size: 1_133_080_512,
         sha256: "4383ac0c3c8e476de98ff979c2a3f069f8c4fb385e7860cf2d28da896cc477c7",
     },
@@ -317,6 +343,8 @@ pub struct Selection {
     pub model_id: String,
     #[serde(default)]
     pub translation_model_id: Option<String>,
+    #[serde(default)]
+    pub translation_engine_id: Option<String>,
     #[serde(default = "default_vad_enabled")]
     pub vad_enabled: bool,
     #[serde(default)]
@@ -334,9 +362,10 @@ fn default_vad_enabled() -> bool {
 impl Default for Selection {
     fn default() -> Self {
         Self {
-            engine_id: "vulkan".into(),
+            engine_id: "crispasr-vulkan".into(),
             model_id: "base".into(),
             translation_model_id: None,
+            translation_engine_id: None,
             vad_enabled: true,
             engine_paths: HashMap::new(),
             model_paths: HashMap::new(),
@@ -353,13 +382,7 @@ pub fn load_selection(dir: &Path) -> Result<Selection, String> {
         dir.join("resources.json.bak")
     };
     if !source.exists() {
-        let mut selection = Selection::default();
-        if let Ok(backend) = fs::read_to_string(dir.join("engines/crispasr/backend.txt")) {
-            if engine_spec(backend.trim()).is_ok() {
-                selection.engine_id = backend.trim().into();
-            }
-        }
-        return Ok(selection);
+        return Ok(Selection::default());
     }
     serde_json::from_slice(&fs::read(source).map_err(|error| error.to_string())?)
         .map_err(|error| format!("资源选择配置无效: {error}"))
@@ -401,9 +424,7 @@ pub fn engine_path(dir: &Path, selection: &Selection, id: &str) -> Option<PathBu
     if installed.is_file() {
         return Some(installed);
     }
-    let legacy = dir.join("engines/crispasr/crispasr.exe");
-    let legacy_id = fs::read_to_string(dir.join("engines/crispasr/backend.txt")).ok()?;
-    (legacy_id.trim() == id && legacy.is_file()).then_some(legacy)
+    None
 }
 
 pub fn model_path(dir: &Path, selection: &Selection, spec: &ModelSpec) -> Option<PathBuf> {
@@ -515,7 +536,8 @@ mod tests {
             "qwen3-1.7b-ja-q8",
         ] {
             let spec = model_spec(id).unwrap();
-            assert_eq!(spec.format, "qwen3-gguf");
+            assert_eq!(spec.format, ArtifactFormat::Gguf);
+            assert_eq!(spec.profile, ModelProfile::Qwen3Asr17b);
             assert!(spec.file.ends_with(".gguf"));
             assert_eq!(spec.sha256.len(), 64);
             assert!(model_url(spec, false).contains(spec.repo));
@@ -529,10 +551,11 @@ mod tests {
             serde_json::from_str(r#"{"engineId":"vulkan","modelId":"base"}"#).unwrap();
         assert!(selection.vad_enabled);
         assert_eq!(selection.translation_model_id, None);
+        assert_eq!(selection.translation_engine_id, None);
     }
 
     #[test]
-    fn legacy_vulkan_install_remains_selectable() {
+    fn legacy_vulkan_install_is_not_selected_by_new_ids() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -543,11 +566,8 @@ mod tests {
         fs::write(engine_dir.join("backend.txt"), "vulkan").unwrap();
         fs::write(engine_dir.join("crispasr.exe"), b"test").unwrap();
         let selection = load_selection(&dir).unwrap();
-        assert_eq!(selection.engine_id, "vulkan");
-        assert_eq!(
-            engine_path(&dir, &selection, "vulkan"),
-            Some(engine_dir.join("crispasr.exe"))
-        );
+        assert_eq!(selection.engine_id, "crispasr-vulkan");
+        assert_eq!(engine_path(&dir, &selection, "crispasr-vulkan"), None);
         assert_eq!(engine_path(&dir, &selection, "cpu"), None);
         fs::remove_dir_all(dir).unwrap();
     }

@@ -8,7 +8,7 @@ use std::{
 use crate::{
     process::hidden_command,
     resources::{self, LlamaVariant},
-    sdk::{ModelSdk, LLAMA_ENGINE_ID},
+    sdk::ModelSdk,
     task::TaskControl,
 };
 
@@ -44,7 +44,7 @@ fn install_variant(
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_nanos();
-    let work = parent.join(format!("llama-staging-{nonce}"));
+    let work = parent.join(format!("{}-staging-{nonce}", variant.id));
     let runtime = work.join("runtime");
     fs::create_dir_all(&runtime).map_err(|error| error.to_string())?;
     let result = (|| {
@@ -82,8 +82,8 @@ fn install_variant(
             return Err("下载的 llama-server.exe 无法运行。".into());
         }
         task.check_cancelled()?;
-        let target = parent.join("llama");
-        let backup = parent.join(format!("llama-backup-{nonce}"));
+        let target = parent.join(variant.id);
+        let backup = parent.join(format!("{}-backup-{nonce}", variant.id));
         if target.exists() {
             fs::rename(&target, &backup).map_err(|error| error.to_string())?;
         }
@@ -94,7 +94,7 @@ fn install_variant(
             }
             return Err(error.to_string());
         }
-        if let Err(error) = sdk.clear_engine_override(LLAMA_ENGINE_ID) {
+        if let Err(error) = sdk.clear_engine_override(variant.id) {
             fs::rename(&target, &runtime)
                 .map_err(|rollback| format!("资源登记失败: {error}; 恢复旧版失败: {rollback}"))?;
             if backup.exists() {
@@ -115,17 +115,17 @@ fn install_variant(
 }
 
 impl ModelSdk {
-    pub fn download_llama_engine(
+    pub(super) fn install_llama_variant(
         &self,
         variant_id: &str,
         task: &TaskControl,
     ) -> Result<PathBuf, String> {
         let variant = resources::llama_variant(variant_id)?;
         let option = self
-            .llama_download_options()
+            .engines()?
             .into_iter()
-            .find(|option| option.id == variant_id)
-            .expect("known llama variant");
+            .find(|item| item.id == variant_id)
+            .ok_or_else(|| format!("未知引擎: {variant_id}"))?;
         if !option.suitable {
             return Err(option.reason.unwrap_or("此运行时不适合当前设备。".into()));
         }

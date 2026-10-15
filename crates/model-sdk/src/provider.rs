@@ -5,15 +5,16 @@ use std::{
 };
 
 use crate::{
+    catalog::ModelProfile,
     process::hidden_command,
     subtitle::{parse_srt, split_aligned_srt, Segment},
 };
 
-pub trait Transcriber {
+pub(crate) trait Transcriber {
     fn transcribe(&self, audio: &Path) -> Result<Vec<Segment>, String>;
 }
 
-pub struct OpenVino<'a> {
+pub(crate) struct OpenVino<'a> {
     pub python: &'a Path,
     pub worker: &'a Path,
     pub model: &'a Path,
@@ -71,11 +72,12 @@ impl Transcriber for OpenVino<'_> {
     }
 }
 
-pub struct CrispAsr<'a> {
+pub(crate) struct CrispAsr<'a> {
     engine: &'a Path,
     model: &'a Path,
     output_base: &'a Path,
     gpu_backend: &'a str,
+    profile: ModelProfile,
     aligner: Option<&'a Path>,
     language: Option<&'a str>,
     run: &'a dyn Fn(Command) -> Result<ExitStatus, String>,
@@ -87,6 +89,7 @@ impl<'a> CrispAsr<'a> {
         model: &'a Path,
         output_base: &'a Path,
         gpu_backend: &'a str,
+        profile: ModelProfile,
         run: &'a dyn Fn(Command) -> Result<ExitStatus, String>,
     ) -> Self {
         Self {
@@ -94,6 +97,7 @@ impl<'a> CrispAsr<'a> {
             model,
             output_base,
             gpu_backend,
+            profile,
             aligner: None,
             language: None,
             run,
@@ -111,19 +115,11 @@ impl<'a> CrispAsr<'a> {
     }
 
     fn model_backend(&self) -> Option<&'static str> {
-        if self
-            .model
-            .extension()
-            .is_some_and(|extension| extension == "gguf")
-        {
-            let name = self.model.file_name()?.to_str()?.to_ascii_lowercase();
-            return Some(if name.contains("1.7b") {
-                "qwen3-1.7b"
-            } else {
-                "qwen3"
-            });
+        match self.profile {
+            ModelProfile::Qwen3Asr17b => Some("qwen3-1.7b"),
+            ModelProfile::Qwen3Asr06b => Some("qwen3"),
+            _ => None,
         }
-        None
     }
 }
 
@@ -194,19 +190,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn crispasr_uses_qwen_backend_for_gguf_models() {
+    fn crispasr_uses_profile_even_when_weight_is_renamed() {
         let run = |_| unreachable!();
         let engine = Path::new("crispasr.exe");
         let output = Path::new("out");
         let qwen = CrispAsr::new(
             engine,
-            Path::new("qwen3-asr-1.7b-q4_k.gguf"),
+            Path::new("renamed-weight.gguf"),
             output,
             "cpu",
+            ModelProfile::Qwen3Asr17b,
             &run,
         );
         assert_eq!(qwen.model_backend(), Some("qwen3-1.7b"));
-        let whisper = CrispAsr::new(engine, Path::new("ggml-base.bin"), output, "cpu", &run);
+        let whisper = CrispAsr::new(
+            engine,
+            Path::new("ggml-base.bin"),
+            output,
+            "cpu",
+            ModelProfile::Whisper,
+            &run,
+        );
         assert_eq!(whisper.model_backend(), None);
     }
 }

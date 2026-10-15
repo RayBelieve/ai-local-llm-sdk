@@ -4,8 +4,11 @@ use std::{
 };
 
 use crate::{
-    diagnostics, resources,
-    sdk::{ModelSdk, LLAMA_ENGINE_ID},
+    catalog::TaskKind,
+    diagnostics,
+    engines::{self, Family},
+    resources,
+    sdk::ModelSdk,
     task::TaskControl,
 };
 
@@ -13,16 +16,10 @@ use super::{download_to, replace_file};
 
 impl ModelSdk {
     pub fn download_engine(&self, id: &str, task: &TaskControl) -> Result<PathBuf, String> {
-        if id == LLAMA_ENGINE_ID {
-            let recommended = self
-                .llama_download_options()
-                .into_iter()
-                .find(|option| option.recommended)
-                .ok_or("当前设备没有可安装的 llama.cpp 运行时。")?;
-            return self.download_llama_engine(&recommended.id, task);
-        }
-        if id == resources::OPENVINO_ENGINE_ID {
-            return self.install_openvino_runtime(task);
+        match engines::get(id)?.family {
+            Family::Llama => return self.install_llama_variant(id, task),
+            Family::OpenVino => return self.install_openvino_runtime(task),
+            Family::CrispAsr => {}
         }
         if !cfg!(target_os = "windows") || !cfg!(target_arch = "x86_64") {
             return Err("自动安装目前仅支持 Windows x86-64。".into());
@@ -85,15 +82,23 @@ impl ModelSdk {
                 .models()?
                 .into_iter()
                 .filter(|item| {
-                    item.descriptor.format == "whisper-ggml"
-                        || item.descriptor.format == "qwen3-gguf"
+                    item.descriptor.task == TaskKind::Transcription
+                        && engines::get(id).is_ok_and(|adapter| {
+                            adapter.supports(
+                                item.descriptor.profile,
+                                item.descriptor.artifact_format,
+                                item.descriptor.task,
+                            )
+                        })
                 })
-                .find_map(|item| item.path);
+                .find_map(|item| item.path.map(|path| (path, item.descriptor.profile)));
             diagnostics::probe_crispasr(
                 spec,
                 &staging.join("crispasr.exe"),
                 &system,
-                model.as_deref(),
+                model
+                    .as_ref()
+                    .map(|(path, profile)| (path.as_path(), *profile)),
             )?;
             let target = parent.join(spec.id);
             let backup = parent.join(format!("{}-backup-{nonce}", spec.id));

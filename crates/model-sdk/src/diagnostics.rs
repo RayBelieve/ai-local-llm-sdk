@@ -240,7 +240,7 @@ pub fn suitability(spec: &EngineSpec, check: &SystemCheck) -> (bool, Option<Stri
     if spec.requires_avx2 && !check.avx2 {
         return (false, Some("处理器缺少 AVX2，请选 CPU 兼容版。".into()));
     }
-    if spec.id == "vulkan" && check.gpus.is_empty() {
+    if spec.id == "crispasr-vulkan" && check.gpus.is_empty() {
         return (false, Some("未检测到可用于 Vulkan 的实体显卡。".into()));
     }
     if let Some(min_driver) = spec.min_nvidia_driver {
@@ -283,9 +283,15 @@ pub fn suitability(spec: &EngineSpec, check: &SystemCheck) -> (bool, Option<Stri
 }
 
 pub fn recommended_engine_id(available: impl Fn(&str) -> bool) -> Option<&'static str> {
-    ["cuda13", "cuda12", "vulkan", "cpu", "cpu-legacy"]
-        .into_iter()
-        .find(|id| available(id))
+    [
+        "crispasr-cuda13",
+        "crispasr-cuda12",
+        "crispasr-vulkan",
+        "crispasr-cpu",
+        "crispasr-cpu-legacy",
+    ]
+    .into_iter()
+    .find(|id| available(id))
 }
 
 fn probe_command(mut command: Command, timeout: Duration) -> Result<String, String> {
@@ -435,7 +441,7 @@ pub fn probe_crispasr(
     spec: &EngineSpec,
     path: &Path,
     check: &SystemCheck,
-    model: Option<&Path>,
+    model: Option<(&Path, crate::ModelProfile)>,
 ) -> Result<(), String> {
     let backend = match spec.gpu_backend {
         "cuda" => "CUDA",
@@ -454,7 +460,7 @@ pub fn probe_crispasr(
         }
         Ok(())
     })?;
-    if let Some(model) = model {
+    if let Some((model, profile)) = model {
         let model_key = probe_key(model, "model", check);
         cached_probe(probe_key(path, &model_key, check), || {
             let nonce = std::time::SystemTime::now()
@@ -494,18 +500,8 @@ pub fn probe_crispasr(
                 .arg("-of")
                 .arg(temporary.join("result"))
                 .args(["-np", "-osrt", "-nf"]);
-            if model
-                .extension()
-                .is_some_and(|extension| extension == "gguf")
-            {
-                let backend = if model.file_name().is_some_and(|name| {
-                    name.to_string_lossy().to_ascii_lowercase().contains("1.7b")
-                }) {
-                    "qwen3-1.7b"
-                } else {
-                    "qwen3"
-                };
-                command.args(["--backend", backend]);
+            if profile == crate::ModelProfile::Qwen3Asr17b {
+                command.args(["--backend", "qwen3-1.7b"]);
             }
             match spec.gpu_backend {
                 "cuda" | "vulkan" => {
@@ -516,10 +512,7 @@ pub fn probe_crispasr(
                 }
             }
             command.arg(&audio);
-            let timeout = if model
-                .extension()
-                .is_some_and(|extension| extension == "gguf")
-            {
+            let timeout = if profile == crate::ModelProfile::Qwen3Asr17b {
                 180
             } else {
                 90
@@ -562,8 +555,8 @@ mod tests {
             vendor: "nvidia".into(),
             driver: "".into(),
         }];
-        let cuda12 = engine_spec("cuda12").unwrap();
-        let cuda13 = engine_spec("cuda13").unwrap();
+        let cuda12 = engine_spec("crispasr-cuda12").unwrap();
+        let cuda13 = engine_spec("crispasr-cuda13").unwrap();
         let eligible = check(nvidia.clone(), Some("581.15"), true);
         assert!(suitability(cuda13, &eligible).0);
         assert!(!suitability(cuda13, &check(nvidia.clone(), Some("576.88"), true)).0);
@@ -578,7 +571,7 @@ mod tests {
         assert!(!suitability(cuda12, &old_gpu).0);
         assert_eq!(
             recommended_engine_id(|id| suitability(engine_spec(id).unwrap(), &eligible).0),
-            Some("cuda13")
+            Some("crispasr-cuda13")
         );
     }
 
@@ -601,15 +594,35 @@ mod tests {
         let id = std::env::var("MODEL_SDK_PROBE_VARIANT").unwrap();
         let spec = engine_spec(&id).unwrap();
         let check = system_check(&Selection::default());
-        probe_crispasr(spec, Path::new(&engine), &check, Some(Path::new(&model))).unwrap();
+        let profile = if std::env::var("MODEL_SDK_PROBE_MODEL_ID")
+            .unwrap_or_default()
+            .starts_with("qwen3-")
+        {
+            crate::ModelProfile::Qwen3Asr17b
+        } else {
+            crate::ModelProfile::Whisper
+        };
+        probe_crispasr(
+            spec,
+            Path::new(&engine),
+            &check,
+            Some((Path::new(&model), profile)),
+        )
+        .unwrap();
     }
 
     #[test]
     fn old_cpu_uses_legacy_variant() {
-        assert!(!suitability(engine_spec("cpu").unwrap(), &check(Vec::new(), None, false)).0);
+        assert!(
+            !suitability(
+                engine_spec("crispasr-cpu").unwrap(),
+                &check(Vec::new(), None, false)
+            )
+            .0
+        );
         assert!(
             suitability(
-                engine_spec("cpu-legacy").unwrap(),
+                engine_spec("crispasr-cpu-legacy").unwrap(),
                 &check(Vec::new(), None, false)
             )
             .0

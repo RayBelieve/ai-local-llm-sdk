@@ -5,18 +5,18 @@ use std::{
 };
 
 use model_sdk::{
-    diagnostics, migration,
+    diagnostics,
     process::hidden_command,
     resources,
     subtitle::{write_srt, Segment},
     task::TaskControl,
-    ModelDescriptor, ModelSdk, TranscriptionOptions, LLAMA_ENGINE_ID, TEXT_GENERATION,
-    TRANSCRIPTION,
+    ArtifactFormat, ModelProfile, ModelSdk, TaskKind, TranscriptionOptions,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager};
 
 mod translate;
+const LLAMA_ENGINE_ID: &str = "llama-cpu";
 
 #[derive(Default)]
 struct AppState {
@@ -48,7 +48,9 @@ struct Environment {
 #[serde(rename_all = "camelCase")]
 struct EngineOption {
     id: String,
-    provider: String,
+    family: String,
+    variant: String,
+    task: TaskKind,
     label: String,
     version: String,
     download_mb: u64,
@@ -56,15 +58,17 @@ struct EngineOption {
     suitable: bool,
     reason: Option<String>,
     recommended: bool,
+    compatible_model_ids: Vec<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ModelOption {
     id: String,
-    provider: String,
     label: String,
-    format: String,
+    profile: ModelProfile,
+    artifact_format: ArtifactFormat,
+    task: TaskKind,
     size_bytes: Option<u64>,
     downloadable: bool,
     installed_path: Option<String>,
@@ -76,13 +80,12 @@ struct ResourceStatus {
     system: diagnostics::SystemCheck,
     storage_dir: String,
     aligner_path: Option<String>,
-    legacy_resources_available: bool,
     engines: Vec<EngineOption>,
     models: Vec<ModelOption>,
     selected_engine_id: String,
     selected_model_id: String,
     selected_translation_model_id: Option<String>,
-    llama_download_options: Vec<model_sdk::LlamaDownloadOption>,
+    selected_translation_engine_id: String,
     translation_ready: bool,
     translation_reason: Option<String>,
     vad_enabled: bool,
@@ -123,7 +126,9 @@ fn resource_status(app: &tauri::AppHandle) -> Result<ResourceStatus, String> {
         .into_iter()
         .map(|info| EngineOption {
             id: info.id,
-            provider: info.provider,
+            family: info.family,
+            variant: info.variant,
+            task: info.task,
             label: info.label,
             version: info.version,
             download_mb: info.download_mb,
@@ -131,6 +136,7 @@ fn resource_status(app: &tauri::AppHandle) -> Result<ResourceStatus, String> {
             suitable: info.suitable,
             reason: info.reason,
             recommended: false,
+            compatible_model_ids: Vec::new(),
         })
         .collect::<Vec<_>>();
     let models = sdk
@@ -138,36 +144,61 @@ fn resource_status(app: &tauri::AppHandle) -> Result<ResourceStatus, String> {
         .into_iter()
         .map(|info| ModelOption {
             id: info.descriptor.id,
-            provider: info.provider,
             label: info.descriptor.label,
-            format: info.descriptor.format,
+            profile: info.descriptor.profile,
+            artifact_format: info.descriptor.artifact_format,
+            task: info.descriptor.task,
             size_bytes: info.size_bytes,
             downloadable: info.downloadable,
             installed_path: info.path.map(|path| path.to_string_lossy().into_owned()),
         })
         .collect::<Vec<_>>();
+    for engine in &mut engines {
+        engine.compatible_model_ids = models
+            .iter()
+            .filter(|model| {
+                sdk.validate_pair_for(&engine.id, &model.id, engine.task)
+                    .is_ok()
+            })
+            .map(|model| model.id.clone())
+            .collect();
+    }
     let selected_translation_model_id = selection
         .translation_model_id
         .clone()
         .filter(|id| {
             models
                 .iter()
-                .any(|model| model.id == *id && model.provider == "llama")
+                .any(|model| model.id == *id && model.task == TaskKind::TextGeneration)
         })
         .or_else(|| {
             models
                 .iter()
-                .find(|model| model.provider == "llama" && model.installed_path.is_some())
+                .find(|model| {
+                    model.task == TaskKind::TextGeneration && model.installed_path.is_some()
+                })
                 .map(|model| model.id.clone())
         })
         .or_else(|| Some(resources::HY_MT_MODEL_ID.into()));
+    let selected_translation_engine_id = selection
+        .translation_engine_id
+        .clone()
+        .unwrap_or_else(|| LLAMA_ENGINE_ID.into());
     let (translation_ready, translation_reason) = if let Some(id) = &selected_translation_model_id {
-        let readiness = sdk.check(LLAMA_ENGINE_ID, id, TEXT_GENERATION)?;
+        let readiness = sdk.check(
+            &selected_translation_engine_id,
+            id,
+            TaskKind::TextGeneration,
+        )?;
         (readiness.ready, readiness.reason)
     } else {
-        (false, Some("请登记翻译 GGUF 模型。".into()))
+        (false, Some("请下载或登记内置翻译模型。".into()))
     };
-    let readiness = sdk.check(&selection.engine_id, &selection.model_id, TRANSCRIPTION)?;
+    let readiness = sdk.check(
+        &selection.engine_id,
+        &selection.model_id,
+        TaskKind::Transcription,
+    )?;
     if !readiness.ready
         && models
             .iter()
@@ -191,11 +222,13 @@ fn resource_status(app: &tauri::AppHandle) -> Result<ResourceStatus, String> {
     for engine in &mut engines {
         engine.recommended = engine.id == recommended_engine_id;
     }
-    let legacy = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|error| error.to_string())?;
-    let llama_download_options = ModelSdk::llama_download_options_for(&system);
+    if let Some(engine) = engines
+        .iter_mut()
+        .rev()
+        .find(|engine| engine.family == "llama" && engine.suitable)
+    {
+        engine.recommended = true;
+    }
     Ok(ResourceStatus {
         ready: system.ffmpeg_available && readiness.ready,
         system,
@@ -203,13 +236,12 @@ fn resource_status(app: &tauri::AppHandle) -> Result<ResourceStatus, String> {
         aligner_path: sdk
             .aligner_path()
             .map(|path| path.to_string_lossy().into_owned()),
-        legacy_resources_available: migration::legacy_resources_available(&legacy),
         engines,
         models,
         selected_engine_id: selection.engine_id,
         selected_model_id: selection.model_id,
         selected_translation_model_id,
-        llama_download_options,
+        selected_translation_engine_id,
         translation_ready,
         translation_reason,
         vad_enabled: selection.vad_enabled,
@@ -299,7 +331,7 @@ async fn select_resources(
         let dir = data_dir(&app)?;
         let state = app.state::<AppState>();
         let _guard = state.resources.lock().map_err(|error| error.to_string())?;
-        sdk(&app)?.validate_pair_for(&engine_id, &model_id, TRANSCRIPTION)?;
+        sdk(&app)?.validate_pair_for(&engine_id, &model_id, TaskKind::Transcription)?;
         let mut selection = resources::load_selection(&dir)?;
         selection.engine_id = engine_id;
         selection.model_id = model_id;
@@ -326,21 +358,8 @@ async fn set_vad_enabled(app: tauri::AppHandle, enabled: bool) -> Result<Resourc
 }
 
 #[tauri::command]
-async fn migrate_legacy_resources(app: tauri::AppHandle) -> Result<ResourceStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let dir = data_dir(&app)?;
-        let legacy = app
-            .path()
-            .app_local_data_dir()
-            .map_err(|error| error.to_string())?;
-        let state = app.state::<AppState>();
-        let _guard = state.resources.lock().map_err(|error| error.to_string())?;
-        migration::migrate_legacy_resources(&legacy, &dir)?;
-        sdk(&app)?.import_legacy_paths()?;
-        resource_status(&app)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+async fn migrate_legacy_resources(_app: tauri::AppHandle) -> Result<ResourceStatus, String> {
+    Err("当前 SDK 不自动迁移旧资源 ID 和记录；请按内置 ID 重新登记本地资源。".into())
 }
 
 #[tauri::command]
@@ -351,7 +370,14 @@ fn register_local_engine(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let _guard = state.resources.lock().map_err(|error| error.to_string())?;
-    sdk(&app)?.register_local_engine(&engine_id, Path::new(&path))
+    sdk(&app)?.register_local_engine(&engine_id, Path::new(&path))?;
+    if engine_id.starts_with("llama-") {
+        let dir = data_dir(&app)?;
+        let mut selection = resources::load_selection(&dir)?;
+        selection.translation_engine_id = Some(engine_id);
+        resources::save_selection(&dir, &selection)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -364,13 +390,7 @@ async fn register_local_model(
         let state = app.state::<AppState>();
         let _guard = state.resources.lock().map_err(|error| error.to_string())?;
         let sdk = sdk(&app)?;
-        let descriptor = sdk
-            .models()?
-            .into_iter()
-            .find(|item| item.descriptor.id == model_id)
-            .ok_or_else(|| format!("未知模型: {model_id}"))?
-            .descriptor;
-        sdk.register_local_model(descriptor, Path::new(&path))
+        sdk.register_local_model(&model_id, Path::new(&path))
     })
     .await
     .map_err(|error| error.to_string())?
@@ -378,34 +398,10 @@ async fn register_local_model(
 
 #[tauri::command]
 async fn register_translation_model(
-    app: tauri::AppHandle,
-    path: String,
+    _app: tauri::AppHandle,
+    _path: String,
 ) -> Result<ResourceStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let _guard = state.resources.lock().map_err(|error| error.to_string())?;
-        let file = Path::new(&path);
-        let label = file
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .ok_or("模型文件名无效。")?;
-        sdk(&app)?.register_local_model(
-            ModelDescriptor {
-                id: "subtitle-translation".into(),
-                label: label.into(),
-                format: "llama-gguf".into(),
-                capabilities: vec![TEXT_GENERATION.into()],
-            },
-            file,
-        )?;
-        let dir = data_dir(&app)?;
-        let mut selection = resources::load_selection(&dir)?;
-        selection.translation_model_id = Some("subtitle-translation".into());
-        resources::save_selection(&dir, &selection)?;
-        resource_status(&app)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    Err("当前 SDK 仅支持内置模型 ID；请登记目录中的翻译模型权重。".into())
 }
 
 #[tauri::command]
@@ -416,10 +412,38 @@ async fn select_translation_model(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let _guard = state.resources.lock().map_err(|error| error.to_string())?;
-        sdk(&app)?.validate_pair_for(LLAMA_ENGINE_ID, &model_id, TEXT_GENERATION)?;
+        let selection = resources::load_selection(&data_dir(&app)?)?;
+        let engine_id = selection
+            .translation_engine_id
+            .as_deref()
+            .unwrap_or(LLAMA_ENGINE_ID);
+        sdk(&app)?.validate_pair_for(engine_id, &model_id, TaskKind::TextGeneration)?;
         let dir = data_dir(&app)?;
         let mut selection = resources::load_selection(&dir)?;
         selection.translation_model_id = Some(model_id);
+        resources::save_selection(&dir, &selection)?;
+        resource_status(&app)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn select_translation_engine(
+    app: tauri::AppHandle,
+    engine_id: String,
+) -> Result<ResourceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _guard = state.resources.lock().map_err(|error| error.to_string())?;
+        let dir = data_dir(&app)?;
+        let mut selection = resources::load_selection(&dir)?;
+        let model_id = selection
+            .translation_model_id
+            .as_deref()
+            .unwrap_or(resources::HY_MT_MODEL_ID);
+        sdk(&app)?.validate_pair_for(&engine_id, model_id, TaskKind::TextGeneration)?;
+        selection.translation_engine_id = Some(engine_id);
         resources::save_selection(&dir, &selection)?;
         resource_status(&app)
     })
@@ -508,22 +532,6 @@ async fn download_engine_variant(
 }
 
 #[tauri::command]
-async fn download_llama_variant(
-    app: tauri::AppHandle,
-    variant_id: String,
-) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let _guard = state.resources.lock().map_err(|error| error.to_string())?;
-        sdk(&app)?
-            .download_llama_engine(&variant_id, &task(&app))
-            .map(|path| path.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
 async fn download_model_variant(
     app: tauri::AppHandle,
     model_id: String,
@@ -548,7 +556,11 @@ async fn download_engine(app: tauri::AppHandle, backend: String) -> Result<Strin
     let _guard = state.resources.lock().map_err(|error| error.to_string())?;
     let mut selection = resources::load_selection(&dir)?;
     selection.engine_id = backend;
-    sdk(&app)?.validate_pair_for(&selection.engine_id, &selection.model_id, TRANSCRIPTION)?;
+    sdk(&app)?.validate_pair_for(
+        &selection.engine_id,
+        &selection.model_id,
+        TaskKind::Transcription,
+    )?;
     resources::save_selection(&dir, &selection)?;
     Ok(path)
 }
@@ -561,7 +573,11 @@ async fn download_model(app: tauri::AppHandle, mirror: bool) -> Result<String, S
     let _guard = state.resources.lock().map_err(|error| error.to_string())?;
     let mut selection = resources::load_selection(&dir)?;
     selection.model_id = "base".into();
-    sdk(&app)?.validate_pair_for(&selection.engine_id, &selection.model_id, TRANSCRIPTION)?;
+    sdk(&app)?.validate_pair_for(
+        &selection.engine_id,
+        &selection.model_id,
+        TaskKind::Transcription,
+    )?;
     resources::save_selection(&dir, &selection)?;
     Ok(path)
 }
@@ -569,7 +585,6 @@ async fn download_model(app: tauri::AppHandle, mirror: bool) -> Result<String, S
 async fn run_transcription(
     app: tauri::AppHandle,
     media_path: String,
-    explicit: Option<(String, String, String, Option<String>, Option<bool>)>,
     selection: resources::Selection,
     options: TranscriptionOptions,
 ) -> Result<Vec<Segment>, String> {
@@ -590,29 +605,15 @@ async fn run_transcription(
             .clone()
             .unwrap_or_else(|| "ffmpeg".into());
         let sdk = ModelSdk::new(dir)?;
-        if let Some((engine, model, backend, provider, vad)) = explicit {
-            sdk.transcribe_paths_with_options(
-                Path::new(&media_path),
-                Path::new(&engine),
-                Path::new(&model),
-                Path::new(&ffmpeg),
-                &backend,
-                provider.as_deref() == Some("openvino"),
-                vad.unwrap_or(true),
-                &options,
-                &control,
-            )
-        } else {
-            sdk.transcribe_with_options(
-                &selection.engine_id,
-                &selection.model_id,
-                Path::new(&media_path),
-                Path::new(&ffmpeg),
-                selection.vad_enabled,
-                &options,
-                &control,
-            )
-        }
+        sdk.transcribe_with_options(
+            &selection.engine_id,
+            &selection.model_id,
+            Path::new(&media_path),
+            Path::new(&ffmpeg),
+            selection.vad_enabled,
+            &options,
+            &control,
+        )
     })
     .await
     .map_err(|error| error.to_string());
@@ -622,34 +623,17 @@ async fn run_transcription(
 
 #[tauri::command]
 async fn transcribe(
-    app: tauri::AppHandle,
-    media_path: String,
-    engine_path: String,
-    model_path: String,
-    gpu_backend: String,
-    provider_id: Option<String>,
-    vad_enabled: Option<bool>,
-    align_timestamps: Option<bool>,
-    language: Option<String>,
+    _app: tauri::AppHandle,
+    _media_path: String,
+    _engine_path: String,
+    _model_path: String,
+    _gpu_backend: String,
+    _provider_id: Option<String>,
+    _vad_enabled: Option<bool>,
+    _align_timestamps: Option<bool>,
+    _language: Option<String>,
 ) -> Result<Vec<Segment>, String> {
-    let selection = resources::load_selection(&data_dir(&app)?)?;
-    run_transcription(
-        app,
-        media_path,
-        Some((
-            engine_path,
-            model_path,
-            gpu_backend,
-            provider_id,
-            vad_enabled,
-        )),
-        selection,
-        TranscriptionOptions {
-            align_timestamps: align_timestamps.unwrap_or(true),
-            language,
-        },
-    )
-    .await
+    Err("当前 SDK 不支持直接路径转写；请先登记内置模型 ID，再选择引擎和模型。".into())
 }
 
 #[tauri::command]
@@ -672,7 +656,6 @@ async fn transcribe_selected(
     run_transcription(
         app,
         media_path,
-        None,
         selection,
         TranscriptionOptions {
             align_timestamps: align_timestamps.unwrap_or(true),
@@ -701,7 +684,19 @@ async fn translate_subtitles(
     let worker_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let sdk = sdk(&worker_app)?;
-        translate::translate_segments(&sdk, &model_id, &target_language, &segments, &control)
+        let selection = resources::load_selection(&data_dir(&worker_app)?)?;
+        let engine_id = selection
+            .translation_engine_id
+            .as_deref()
+            .unwrap_or(LLAMA_ENGINE_ID);
+        translate::translate_segments(
+            &sdk,
+            engine_id,
+            &model_id,
+            &target_language,
+            &segments,
+            &control,
+        )
     })
     .await
     .map_err(|error| error.to_string());
@@ -743,6 +738,7 @@ pub fn run() {
             register_local_model,
             register_translation_model,
             select_translation_model,
+            select_translation_engine,
             register_local_aligner,
             download_aligner,
             set_ffmpeg_path,
@@ -752,7 +748,6 @@ pub fn run() {
             download_model_variant,
             download_engine,
             download_engine_variant,
-            download_llama_variant,
             transcribe,
             transcribe_selected,
             translate_subtitles,

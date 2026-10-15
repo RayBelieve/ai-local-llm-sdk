@@ -66,6 +66,7 @@ impl ModelSdk {
                 .output()
                 .is_ok_and(|output| output.status.success())
         {
+            self.clear_engine_override(resources::OPENVINO_ENGINE_ID)?;
             return Ok(python);
         }
         let _ = fs::remove_file(dir.join("ready.txt"));
@@ -138,6 +139,7 @@ impl ModelSdk {
         )
         .map_err(|error| error.to_string())?;
         self.ensure_openvino_worker()?;
+        self.clear_engine_override(resources::OPENVINO_ENGINE_ID)?;
         task.progress("engine", 100, "OpenVINO 运行时已就绪");
         Ok(python)
     }

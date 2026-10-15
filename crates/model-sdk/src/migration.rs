@@ -145,9 +145,9 @@ mod tests {
             b"model"
         );
         let selection = load_selection(&portable).unwrap();
-        assert_eq!(selection.engine_id, "vulkan");
+        assert_eq!(selection.engine_id, "crispasr-vulkan");
         assert_eq!(selection.model_id, "base");
-        assert!(engine_path(&portable, &selection, "vulkan").is_some());
+        assert!(engine_path(&portable, &selection, "vulkan").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

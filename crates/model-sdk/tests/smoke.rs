@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use model_sdk::{
-    task::TaskControl, ChatMessage, ChatRole, GenerationOptions, ModelDescriptor, ModelSdk,
-    TranscriptionOptions, LLAMA_ENGINE_ID, TEXT_GENERATION,
+    task::TaskControl, ChatMessage, ChatRole, GenerationOptions, ModelSdk, TranscriptionOptions,
 };
+const LLAMA_ENGINE_ID: &str = "llama-cpu";
 
 #[test]
 #[ignore = "requires locally installed engine, model, FFmpeg, and speech audio"]
@@ -55,20 +55,12 @@ fn generates_with_local_llama_server() {
     let sdk = ModelSdk::new(&root).unwrap();
     sdk.register_local_engine(LLAMA_ENGINE_ID, Path::new(&engine))
         .unwrap();
-    sdk.register_local_model(
-        ModelDescriptor {
-            id: "local-text".into(),
-            label: "Local text model".into(),
-            format: "llama-gguf".into(),
-            capabilities: vec![TEXT_GENERATION.into()],
-        },
-        Path::new(&model),
-    )
-    .unwrap();
+    sdk.register_local_model(model_sdk::resources::HY_MT_MODEL_ID, Path::new(&model))
+        .unwrap();
     let output = sdk
         .generate_text(
             LLAMA_ENGINE_ID,
-            "local-text",
+            model_sdk::resources::HY_MT_MODEL_ID,
             "Reply with a single short word: hello",
             16,
             &TaskControl::default(),
@@ -78,7 +70,7 @@ fn generates_with_local_llama_server() {
     let output = sdk
         .generate_text(
             LLAMA_ENGINE_ID,
-            "local-text",
+            model_sdk::resources::HY_MT_MODEL_ID,
             "Reply with a single short word: world",
             16,
             &TaskControl::default(),
@@ -116,7 +108,7 @@ fn generates_with_local_llama_server() {
     let streamed = sdk
         .generate_chat_stream(
             LLAMA_ENGINE_ID,
-            "local-text",
+            model_sdk::resources::HY_MT_MODEL_ID,
             &messages,
             &options,
             &TaskControl::default(),
@@ -128,7 +120,7 @@ fn generates_with_local_llama_server() {
     assert!(!sdk
         .generate_chat(
             LLAMA_ENGINE_ID,
-            "local-text",
+            model_sdk::resources::HY_MT_MODEL_ID,
             &messages,
             &options,
             &TaskControl::default(),
@@ -141,7 +133,7 @@ fn generates_with_local_llama_server() {
     assert!(sdk
         .generate_text(
             LLAMA_ENGINE_ID,
-            "local-text",
+            model_sdk::resources::HY_MT_MODEL_ID,
             &too_long,
             128,
             &TaskControl::default(),
@@ -160,7 +152,7 @@ fn generates_with_local_llama_server() {
         let handle = scope.spawn(move || {
             sdk.generate_text(
                 LLAMA_ENGINE_ID,
-                "local-text",
+                model_sdk::resources::HY_MT_MODEL_ID,
                 "Write a long answer about local inference.",
                 256,
                 &running,
@@ -175,7 +167,7 @@ fn generates_with_local_llama_server() {
     let output = sdk
         .generate_text(
             LLAMA_ENGINE_ID,
-            "local-text",
+            model_sdk::resources::HY_MT_MODEL_ID,
             "Reply with a single short word: done",
             16,
             &TaskControl::default(),

@@ -13,10 +13,12 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::{
+    catalog::TaskKind,
     diagnostics,
+    engines::{self, Family},
     process::hidden_command,
     resources::Selection,
-    sdk::{ModelSdk, LLAMA_ENGINE_ID, TEXT_GENERATION},
+    sdk::ModelSdk,
     task::TaskControl,
 };
 
@@ -182,10 +184,15 @@ impl ModelSdk {
             return Err("消息列表不能为空，且每条消息必须有内容。".into());
         }
         options.validate()?;
-        if engine_id != LLAMA_ENGINE_ID {
+        if engines::get(engine_id)?.family != Family::Llama {
             return Err(format!("不支持的文本生成引擎: {engine_id}"));
         }
-        self.validate_pair_for(engine_id, model_id, TEXT_GENERATION)?;
+        let readiness = self.check(engine_id, model_id, TaskKind::TextGeneration)?;
+        if !readiness.ready {
+            return Err(readiness
+                .reason
+                .unwrap_or_else(|| "文本模型尚未就绪。".into()));
+        }
         if !cfg!(all(windows, target_arch = "x86_64")) {
             return Err("llama.cpp 接入目前仅支持 Windows x86-64。".into());
         }

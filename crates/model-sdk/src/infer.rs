@@ -6,10 +6,10 @@ use std::{
 };
 
 use crate::{
+    catalog::{ArtifactFormat, TaskKind},
+    engines::{self, AudioRequest, Family},
     process::hidden_command,
-    provider::{CrispAsr, OpenVino, Transcriber},
-    resources,
-    sdk::{ModelSdk, TRANSCRIPTION},
+    sdk::ModelSdk,
     subtitle::whole_transcript,
     subtitle::Segment,
     task::TaskControl,
@@ -88,62 +88,37 @@ impl ModelSdk {
         if !media.is_file() {
             return Err(format!("找不到文件: {}", media.display()));
         }
-        let ready = self.check(engine_id, model_id, TRANSCRIPTION)?;
+        let ready = self.check(engine_id, model_id, TaskKind::Transcription)?;
         if !ready.ready {
             return Err(ready.reason.unwrap_or_else(|| "所选资源尚未就绪。".into()));
         }
         let engine = self.engine_path(engine_id)?.ok_or("所选推理引擎不存在。")?;
         let model = self.model_path(model_id)?.ok_or("所选模型不存在。")?;
-        let backend = if engine_id == resources::OPENVINO_ENGINE_ID {
-            "cpu"
-        } else {
-            resources::engine_spec(engine_id)?.gpu_backend
-        };
-        self.transcribe_paths_with_options(
+        let adapter = engines::get(engine_id)?;
+        let descriptor = Self::descriptor(model_id)?;
+        self.transcribe_resolved(
             media,
             &engine,
             &model,
             ffmpeg_path,
-            backend,
-            engine_id == resources::OPENVINO_ENGINE_ID,
+            adapter,
+            descriptor.profile,
+            descriptor.artifact_format,
             vad_enabled,
             options,
             task,
         )
     }
 
-    pub fn transcribe_paths(
+    fn transcribe_resolved(
         &self,
         media: &Path,
         engine: &Path,
         model: &Path,
         ffmpeg_path: &Path,
-        gpu_backend: &str,
-        openvino: bool,
-        vad_enabled: bool,
-        task: &TaskControl,
-    ) -> Result<Vec<Segment>, String> {
-        self.transcribe_paths_with_options(
-            media,
-            engine,
-            model,
-            ffmpeg_path,
-            gpu_backend,
-            openvino,
-            vad_enabled,
-            &TranscriptionOptions::default(),
-            task,
-        )
-    }
-
-    pub fn transcribe_paths_with_options(
-        &self,
-        media: &Path,
-        engine: &Path,
-        model: &Path,
-        ffmpeg_path: &Path,
-        gpu_backend: &str,
-        openvino: bool,
+        adapter: &engines::Adapter,
+        profile: crate::ModelProfile,
+        format: ArtifactFormat,
         vad_enabled: bool,
         options: &TranscriptionOptions,
         task: &TaskControl,
@@ -155,7 +130,9 @@ impl ModelSdk {
         if !engine.is_file() {
             return Err(format!("找不到文件: {}", engine.display()));
         }
-        if (openvino && !model.is_dir()) || (!openvino && !model.is_file()) {
+        if (adapter.family == Family::OpenVino && !model.is_dir())
+            || (adapter.family != Family::OpenVino && !model.is_file())
+        {
             return Err(format!("找不到模型: {}", model.display()));
         }
         let jobs_dir = self.root().join("jobs");
@@ -201,38 +178,21 @@ impl ModelSdk {
             }
             task.progress("transcribe", 15, "正在转写音频");
             let runner = |command| task.run(command);
-            let segments = if openvino {
-                let worker = self.ensure_openvino_worker()?;
-                let vad_model = if vad_enabled {
-                    self.ensure_vad_model(task)?
-                } else {
-                    worker.join("silero_vad_v4.onnx")
-                };
-                OpenVino {
-                    python: &engine,
-                    worker: &worker.join("worker.py"),
-                    model: &model,
-                    vad_model: &vad_model,
-                    vad_enabled,
-                    language: openvino_language,
-                    output_base: &output_base,
-                    run: &runner,
-                }
-                .transcribe(&wav)?
-            } else {
-                let aligner = model
-                    .extension()
-                    .is_some_and(|extension| extension == "gguf" && options.align_timestamps)
-                    .then(|| self.ensure_aligner_model(task))
-                    .transpose()?;
-                let transcriber = CrispAsr::new(engine, model, &output_base, gpu_backend, &runner)
-                    .with_language(options.language.as_deref());
-                if let Some(ref aligner) = aligner {
-                    transcriber.with_aligner(aligner).transcribe(&wav)?
-                } else {
-                    transcriber.transcribe(&wav)?
-                }
-            };
+            let segments = adapter.transcribe(&AudioRequest {
+                sdk: self,
+                engine,
+                model,
+                wav: &wav,
+                output_base: &output_base,
+                profile,
+                format,
+                language: options.language.as_deref(),
+                openvino_language,
+                vad_enabled,
+                options,
+                task,
+                run: &runner,
+            })?;
             let segments = if options.align_timestamps {
                 segments
             } else {
@@ -279,13 +239,14 @@ mod tests {
                 .map(|_| {
                     scope.spawn(|| {
                         assert!(sdk
-                            .transcribe_paths_with_options(
+                            .transcribe_resolved(
                                 &media,
                                 &engine,
                                 &model,
                                 &root.join("missing-ffmpeg"),
-                                "cpu",
-                                false,
+                                engines::get("crispasr-cpu").unwrap(),
+                                crate::ModelProfile::Whisper,
+                                ArtifactFormat::Ggml,
                                 false,
                                 &TranscriptionOptions::default(),
                                 &TaskControl::default(),

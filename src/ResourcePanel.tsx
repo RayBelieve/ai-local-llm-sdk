@@ -19,7 +19,6 @@ export type Progress = { stage: string; percent: number; message: string };
 export type ResourceStatus = {
   storageDir: string;
   alignerPath: string | null;
-  legacyResourcesAvailable: boolean;
   system: {
     platform: string;
     architecture: string;
@@ -35,7 +34,9 @@ export type ResourceStatus = {
   };
   engines: {
     id: string;
-    provider: string;
+    family: "crispasr" | "openvino" | "llama";
+    variant: string;
+    task: "transcription" | "text-generation";
     label: string;
     version: string;
     downloadMb: number;
@@ -43,12 +44,14 @@ export type ResourceStatus = {
     suitable: boolean;
     reason: string | null;
     recommended: boolean;
+    compatibleModelIds: string[];
   }[];
   models: {
     id: string;
-    provider: string;
     label: string;
-    format: string;
+    profile: "whisper" | "qwen3-asr-1.7b" | "qwen3-asr-0.6b" | "hy-mt-1.5";
+    artifactFormat: "ggml" | "gguf" | "openvino-ir";
+    task: "transcription" | "text-generation";
     sizeBytes: number | null;
     downloadable: boolean;
     installedPath: string | null;
@@ -56,7 +59,7 @@ export type ResourceStatus = {
   selectedEngineId: string;
   selectedModelId: string;
   selectedTranslationModelId: string | null;
-  llamaDownloadOptions: { id: string; label: string; downloadMb: number; suitable: boolean; recommended: boolean; reason: string | null }[];
+  selectedTranslationEngineId: string;
   translationReady: boolean;
   translationReason: string | null;
   vadEnabled: boolean;
@@ -85,15 +88,13 @@ function sizeLabel(bytes: number) {
 function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProgress, onError, onNotice }: Props) {
   const engine = status?.engines.find((item) => item.id === status.selectedEngineId);
   const model = status?.models.find((item) => item.id === status.selectedModelId);
-  const transcriptionEngines = status?.engines.filter((item) => item.provider !== "llama") || [];
-  const transcriptionModels = status?.models.filter((item) => item.provider !== "llama") || [];
-  const providerModels = transcriptionModels.filter((item) => item.provider === engine?.provider);
-  const translationEngine = status?.engines.find((item) => item.provider === "llama");
-  const translationModels = status?.models.filter((item) => item.provider === "llama") || [];
+  const transcriptionEngines = status?.engines.filter((item) => item.task === "transcription") || [];
+  const transcriptionModels = status?.models.filter((item) => item.task === "transcription") || [];
+  const compatibleModels = transcriptionModels.filter((item) => engine?.compatibleModelIds.includes(item.id));
+  const translationEngine = status?.engines.find((item) => item.id === status.selectedTranslationEngineId);
+  const translationModels = status?.models.filter((item) => item.task === "text-generation" && translationEngine?.compatibleModelIds.includes(item.id)) || [];
   const translationModel = translationModels.find((item) => item.id === status?.selectedTranslationModelId);
-  const [llamaVariantId, setLlamaVariantId] = useState("");
-  const llamaVariant = status?.llamaDownloadOptions.find((item) => item.id === llamaVariantId)
-    || status?.llamaDownloadOptions.find((item) => item.recommended);
+  const translationEngines = status?.engines.filter((item) => item.task === "text-generation") || [];
   const recommended = status?.engines.find((item) => item.recommended);
   const locked = Boolean(busy);
   const ffmpegInstallSupported = status?.system && [
@@ -163,20 +164,6 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
     }
   }
 
-  async function migrate() {
-    onBusy("migration");
-    onError("");
-    onNotice("");
-    try {
-      onStatus(await invoke<ResourceStatus>("migrate_legacy_resources"));
-      onNotice("旧资源已迁移到程序目录");
-    } catch (reason) {
-      onError(String(reason));
-    } finally {
-      onBusy(null);
-    }
-  }
-
   async function changeResource(kind: "engine" | "model", source: "download" | "local") {
     if (!status) return;
     const id = kind === "engine" ? status.selectedEngineId : status.selectedModelId;
@@ -184,10 +171,10 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
     if (source === "local") {
       const result = await open({
         multiple: false,
-        directory: kind === "model" && engine?.provider === "openvino",
-        filters: kind === "engine" && engine?.provider === "openvino" && status.system.platform !== "windows" ? undefined : kind === "engine"
-          ? [{ name: engine?.provider === "openvino" ? "Python" : "CrispASR", extensions: ["exe"] }]
-          : engine?.provider === "openvino" ? undefined : model?.format === "qwen3-gguf"
+        directory: kind === "model" && engine?.family === "openvino",
+        filters: kind === "engine" && engine?.family === "openvino" && status.system.platform !== "windows" ? undefined : kind === "engine"
+          ? [{ name: engine?.family === "openvino" ? "Python" : "CrispASR", extensions: ["exe"] }]
+          : engine?.family === "openvino" ? undefined : model?.profile === "qwen3-asr-1.7b"
             ? [{ name: "Qwen3 GGUF", extensions: ["gguf"] }]
             : [{ name: "Whisper GGML", extensions: ["bin"] }],
       });
@@ -216,10 +203,10 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
     }
   }
 
-  async function registerTranslation(kind: "engine" | "model") {
+  async function registerTranslationEngine() {
     const result = await open({
       multiple: false,
-      filters: [{ name: kind === "engine" ? "llama-server" : "翻译 GGUF", extensions: [kind === "engine" ? "exe" : "gguf"] }],
+      filters: [{ name: "llama-server", extensions: ["exe"] }],
     });
     if (typeof result !== "string") return;
     onBusy("translation-resource");
@@ -227,13 +214,40 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
     onError("");
     onNotice("");
     try {
-      if (kind === "engine") {
-        await invoke("register_local_engine", { engineId: "llama-server", path: result });
-        onStatus(await invoke<ResourceStatus>("get_resource_status"));
-      } else {
-        onStatus(await invoke<ResourceStatus>("register_translation_model", { path: result }));
-      }
-      onNotice(kind === "engine" ? "翻译引擎已登记" : "翻译模型已登记");
+      await invoke("register_local_engine", { engineId: status?.selectedTranslationEngineId, path: result });
+      onStatus(await invoke<ResourceStatus>("get_resource_status"));
+      onNotice("翻译引擎已登记");
+    } catch (reason) {
+      onError(String(reason));
+    } finally {
+      onBusy(null);
+    }
+  }
+
+  async function registerTranslationModel() {
+    const result = await open({ multiple: false, filters: [{ name: "翻译 GGUF", extensions: ["gguf"] }] });
+    if (typeof result !== "string" || !translationModel) return;
+    onBusy("translation-resource");
+    onProgress(null);
+    onError("");
+    onNotice("");
+    try {
+      await invoke("register_local_model", { modelId: translationModel.id, path: result });
+      onStatus(await invoke<ResourceStatus>("get_resource_status"));
+      onNotice("翻译模型已登记");
+    } catch (reason) {
+      onError(String(reason));
+    } finally {
+      onBusy(null);
+    }
+  }
+
+  async function selectTranslationEngine(engineId: string) {
+    onBusy("translation-resource");
+    onError("");
+    onNotice("");
+    try {
+      onStatus(await invoke<ResourceStatus>("select_translation_engine", { engineId }));
     } catch (reason) {
       onError(String(reason));
     } finally {
@@ -261,14 +275,15 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
     onNotice("");
     try {
       if (kind === "engine") {
-        if (!llamaVariant) return;
-        await invoke("download_llama_variant", { variantId: llamaVariant.id });
+        if (!translationEngine) return;
+        await invoke("download_engine_variant", { engineId: translationEngine.id });
         onStatus(await invoke<ResourceStatus>("get_resource_status"));
       } else {
-        await invoke("download_model_variant", { modelId: "hy-mt-1.5-1.8b-q4", mirror });
-        onStatus(await invoke<ResourceStatus>("select_translation_model", { modelId: "hy-mt-1.5-1.8b-q4" }));
+        if (!translationModel) return;
+        await invoke("download_model_variant", { modelId: translationModel.id, mirror });
+        onStatus(await invoke<ResourceStatus>("select_translation_model", { modelId: translationModel.id }));
       }
-      onNotice(kind === "engine" ? "翻译引擎已安装" : "HY-MT 翻译模型已安装");
+      onNotice(kind === "engine" ? "翻译引擎已安装" : "翻译模型已安装");
     } catch (reason) {
       onError(String(reason));
     } finally {
@@ -344,12 +359,6 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
           <section className="inspect-section storage-section">
             <div className="inspect-heading"><HardDriveDownload size={16} /><h2>资源存储目录</h2></div>
             <code className="storage-path" title={status.storageDir}>{status.storageDir}</code>
-            {status.legacyResourcesAvailable && (
-              <button className="button storage-migrate" onClick={migrate} disabled={locked}>
-                {busy === "migration" ? <LoaderCircle size={15} className="spin" /> : <HardDriveDownload size={15} />}
-                迁移旧资源
-              </button>
-            )}
           </section>
 
           <section className="inspect-section">
@@ -370,33 +379,35 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
           </section>
 
           <section className="inspect-section">
-            <div className="inspect-heading"><Cpu size={16} /><h2>推理引擎</h2><span>{engine?.provider === "openvino" ? "OpenVINO" : "CrispASR"} {engine?.version}</span></div>
+            <div className="inspect-heading"><Cpu size={16} /><h2>推理引擎</h2><span>{engine?.family === "openvino" ? "OpenVINO" : "CrispASR"} {engine?.version}</span></div>
             <div className="selection-field">
               <label htmlFor="engine-select">运行时版本</label>
               <select id="engine-select" value={status.selectedEngineId} disabled={locked}
                 onChange={(event) => {
                   const chosen = status.engines.find((item) => item.id === event.target.value);
-                   const matching = transcriptionModels.find((item) => item.provider === chosen?.provider);
-                  if (matching) void select(event.target.value, chosen?.provider === model?.provider ? status.selectedModelId : matching.id);
+                  const matching = transcriptionModels.find((item) => chosen?.compatibleModelIds.includes(item.id));
+                  if (matching) void select(event.target.value, chosen?.compatibleModelIds.includes(status.selectedModelId) ? status.selectedModelId : matching.id);
                 }}>
+                {!engine && <option value={status.selectedEngineId} disabled>旧引擎 ID：{status.selectedEngineId}</option>}
                  {transcriptionEngines.map((item) => (
                   <option key={item.id} value={item.id}>{item.label}{item.recommended ? " · 推荐" : ""}{item.installedPath ? " · 已安装" : ""}</option>
                 ))}
               </select>
             </div>
             <div className="resource-detail">
-              <div className="resource-detail-title"><strong>{engine?.label}</strong><span>{engine?.installedPath ? "已安装" : "未安装"}</span></div>
-              <span className="resource-path" title={engine?.installedPath || undefined}>{engine?.installedPath || (engine?.provider === "openvino" ? "按需安装便携 Python 与推理依赖" : `下载约 ${engine?.downloadMb ?? 0} MB`)}</span>
+              <div className="resource-detail-title"><strong>{engine?.label || status.selectedEngineId}</strong><span>{engine?.installedPath ? "已安装" : "未安装"}</span></div>
+              <span className="resource-path" title={engine?.installedPath || undefined}>{engine?.installedPath || (!engine ? "旧引擎记录不兼容" : engine.family === "openvino" ? "按需安装便携 Python 与推理依赖" : `下载约 ${engine.downloadMb} MB`)}</span>
+              {!engine && <p className="resource-note"><CircleAlert size={14} />请选择当前目录中的运行时，再重新登记或下载。</p>}
               {engine?.reason && <p className="resource-note"><CircleAlert size={14} />{engine.reason}</p>}
-              {recommended && engine?.provider === "crispasr" && recommended.id !== engine?.id && (
-                <button className="text-action" onClick={() => select(recommended.id, status.selectedModelId)} disabled={locked}>
+              {recommended && engine?.family === "crispasr" && recommended.id !== engine?.id && (
+                <button className="text-action" onClick={() => select(recommended.id, recommended.compatibleModelIds.includes(status.selectedModelId) ? status.selectedModelId : recommended.compatibleModelIds[0])} disabled={locked || !recommended.compatibleModelIds.length}>
                   使用推荐版本：{recommended.label}
                 </button>
               )}
             </div>
             <div className="resource-controls">
-              <button className="button" onClick={() => changeResource("engine", "local")} disabled={locked}>
-                <FolderOpen size={15} />{engine?.provider === "openvino" ? "登记 Python 环境" : "登记本机文件"}
+              <button className="button" onClick={() => changeResource("engine", "local")} disabled={locked || !engine}>
+                <FolderOpen size={15} />{engine?.family === "openvino" ? "登记 Python 环境" : "登记本机文件"}
               </button>
               <button className="button button-primary" onClick={() => changeResource("engine", "download")}
                 disabled={locked || (!engine?.suitable && !engine?.installedPath)}>
@@ -407,12 +418,12 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
           </section>
 
           <section className="inspect-section">
-            <div className="inspect-heading"><HardDriveDownload size={16} /><h2>转写模型</h2><span>{engine?.provider === "openvino" ? "Qwen3-ASR" : "Whisper GGML / Qwen3 GGUF"}</span></div>
+            <div className="inspect-heading"><HardDriveDownload size={16} /><h2>转写模型</h2><span>{engine?.family === "openvino" ? "Qwen3-ASR" : "Whisper GGML / Qwen3 GGUF"}</span></div>
             <div className="selection-field">
               <label htmlFor="model-select">模型规格</label>
               <select id="model-select" value={status.selectedModelId} disabled={locked}
                 onChange={(event) => select(status.selectedEngineId, event.target.value)}>
-                {providerModels.map((item) => (
+                {compatibleModels.map((item) => (
                   <option key={item.id} value={item.id}>{item.label}{item.installedPath ? " · 已安装" : ""}{item.sizeBytes === null ? "" : ` · ${sizeLabel(item.sizeBytes)}`}</option>
                 ))}
               </select>
@@ -424,7 +435,7 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
             <div className="resource-controls">
               {model?.downloadable && <label className="mirror-toggle"><input type="checkbox" checked={mirror} onChange={(event) => setMirror(event.target.checked)} disabled={locked} />镜像源</label>}
               <button className="button" onClick={() => changeResource("model", "local")} disabled={locked}>
-                <FolderOpen size={15} />{engine?.provider === "openvino" ? "登记模型目录" : "登记本机文件"}
+                <FolderOpen size={15} />{engine?.family === "openvino" ? "登记模型目录" : "登记本机文件"}
               </button>
               {model?.downloadable && <button className="button button-primary" onClick={() => changeResource("model", "download")} disabled={locked}>
                 {busy === "model" ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}
@@ -433,7 +444,7 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
             </div>
           </section>
 
-          {model?.format === "qwen3-gguf" && (
+          {model?.profile === "qwen3-asr-1.7b" && (
             <section className="inspect-section">
               <div className="inspect-heading"><AudioLines size={16} /><h2>时间轴对齐</h2><span>Qwen3 ForcedAligner Q5</span></div>
               <div className="resource-detail">
@@ -450,7 +461,7 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
             </section>
           )}
 
-          {engine?.provider === "openvino" && (
+          {engine?.family === "openvino" && (
             <section className="inspect-section">
               <div className="inspect-heading"><AudioLines size={16} /><h2>语音分段</h2><span>Silero VAD</span></div>
               <label className="mirror-toggle"><input type="checkbox" checked={status.vadEnabled} onChange={(event) => void setVad(event.target.checked)} disabled={locked} />启用 VAD</label>
@@ -461,9 +472,9 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
             <div className="inspect-heading"><Languages size={16} /><h2>字幕翻译</h2><span>llama.cpp / GGUF</span></div>
             <div className="selection-field">
               <label htmlFor="llama-variant-select">运行版本</label>
-              <select id="llama-variant-select" value={llamaVariant?.id || ""} disabled={locked || !translationEngine?.suitable}
-                onChange={(event) => setLlamaVariantId(event.target.value)}>
-                {status.llamaDownloadOptions.map((item) => <option key={item.id} value={item.id} disabled={!item.suitable}>{item.label} · {item.downloadMb} MB{item.recommended ? " · 推荐" : ""}</option>)}
+              <select id="llama-variant-select" value={status.selectedTranslationEngineId} disabled={locked}
+                onChange={(event) => void selectTranslationEngine(event.target.value)}>
+                {translationEngines.map((item) => <option key={item.id} value={item.id} disabled={!item.suitable}>{item.label} · {item.downloadMb} MB{item.recommended ? " · 推荐" : ""}</option>)}
               </select>
             </div>
             <div className="resource-detail">
@@ -471,8 +482,8 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
               <span className="resource-path" title={translationEngine?.installedPath || undefined}>{translationEngine?.installedPath || "选择本机 llama-server.exe"}</span>
             </div>
             <div className="resource-controls">
-              <button className="button" onClick={() => registerTranslation("engine")} disabled={locked || !translationEngine?.suitable}><FolderOpen size={15} />登记翻译引擎</button>
-              <button className="button button-primary" onClick={() => downloadTranslation("engine")} disabled={locked || !llamaVariant?.suitable} title={llamaVariant?.reason || undefined}>
+              <button className="button" onClick={registerTranslationEngine} disabled={locked || !translationEngine?.suitable}><FolderOpen size={15} />登记翻译引擎</button>
+              <button className="button button-primary" onClick={() => downloadTranslation("engine")} disabled={locked || !translationEngine?.suitable} title={translationEngine?.reason || undefined}>
                 {busy === "translation-resource" ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}{translationEngine?.installedPath ? "重新安装" : "下载安装"}
               </button>
             </div>
@@ -481,19 +492,19 @@ function ResourcePanel({ status, error, busy, progress, onStatus, onBusy, onProg
               <select id="translation-model-select" value={status.selectedTranslationModelId || ""} disabled={locked || !translationModels.length}
                 onChange={(event) => void selectTranslationModel(event.target.value)}>
                 {!translationModels.length && <option value="">未登记模型</option>}
-                {translationModels.map((item) => <option key={item.id} value={item.id}>{item.label}{item.installedPath ? " · 已登记" : " · 文件缺失"}</option>)}
+                {translationModels.map((item) => <option key={item.id} value={item.id}>{item.label}{item.installedPath ? " · 已安装" : " · 未安装"}</option>)}
               </select>
             </div>
             <div className="resource-detail">
               <div className="resource-detail-title"><strong>{translationModel?.label || "翻译 GGUF"}</strong><span>{status.translationReady ? "可用" : "未就绪"}</span></div>
-              <span className="resource-path" title={translationModel?.installedPath || undefined}>{translationModel?.installedPath || "选择本机翻译模型"}</span>
+              <span className="resource-path" title={translationModel?.installedPath || undefined}>{translationModel?.installedPath || "下载或登记内置翻译模型"}</span>
               {status.translationReason && <p className="resource-note"><CircleAlert size={14} />{status.translationReason}</p>}
             </div>
             <div className="resource-controls">
               <label className="mirror-toggle"><input type="checkbox" checked={mirror} onChange={(event) => setMirror(event.target.checked)} disabled={locked} />镜像源</label>
-              <button className="button" onClick={() => registerTranslation("model")} disabled={locked || !translationEngine?.suitable}><FolderOpen size={15} />登记翻译 GGUF</button>
-              <button className="button button-primary" onClick={() => downloadTranslation("model")} disabled={locked}>
-                {busy === "translation-resource" ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}下载 HY-MT
+              <button className="button" onClick={registerTranslationModel} disabled={locked || !translationModel}><FolderOpen size={15} />登记翻译模型</button>
+              <button className="button button-primary" onClick={() => downloadTranslation("model")} disabled={locked || !translationModel?.downloadable}>
+                {busy === "translation-resource" ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}下载模型
               </button>
             </div>
           </section>
