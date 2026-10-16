@@ -6,6 +6,8 @@
 
 - `speech-to-text`: CrispASR with Whisper GGML or Qwen3-ASR 1.7B GGUF models (Q4/Q8, standard/Japanese anime), and OpenVINO CPU with Qwen3-ASR 0.6B INT8.
 - `text-generation`: llama.cpp server with a downloaded or locally registered GGUF text model on Windows x86-64. One `ModelSdk` instance reuses its loopback server for the same engine/model pair and stops it when dropped or cancelled.
+- `object-detection`: YOLOv8 and YOLO11 ONNX models using ONNX Runtime CPU.
+- `image-tagging`: nine WD-14 v2/v3 ONNX models using the same ONNX Runtime CPU engine. `tag_image` returns every tag's original name, category, and score plus the four ratings; applications choose any filtering, translation, or prompt formatting.
 - Windows x86-64: automatic installation for the listed engines and models.
 - Other platforms: local registration when a compatible runtime is available. MLX is not implemented yet.
 - `install_ffmpeg(&task)` downloads and verifies a platform binary on Windows x86-64, macOS x86-64/ARM64, or Linux x86-64/ARM64. The returned path can be passed to `transcribe_with_options`; the SDK never bundles FFmpeg.
@@ -77,3 +79,4 @@ The SDK writes a versioned `sdk-resources.json` under the chosen storage directo
 
 Run `cargo test --manifest-path crates/model-sdk/Cargo.toml` from the repository root. The ignored `tests/smoke.rs` test runs an installed engine against speech audio when `MODEL_SDK_SMOKE_ROOT`, `MODEL_SDK_SMOKE_AUDIO`, `MODEL_SDK_SMOKE_ENGINE`, and `MODEL_SDK_SMOKE_MODEL` are set. The ignored VAD and FFmpeg tests download and verify their pinned resources.
 The ignored `generates_with_local_llama_server` smoke test uses `MODEL_SDK_LLAMA_ENGINE` and `MODEL_SDK_LLAMA_MODEL` to load a real local text model.
+The ignored `tags_image_with_wd14` smoke test uses `MODEL_SDK_WD14_ENGINE` (Python executable), `MODEL_SDK_WD14_MODEL` (directory containing `model.onnx` and `selected_tags.csv`), `MODEL_SDK_WD14_IMAGE`, and optionally `MODEL_SDK_WD14_MODEL_ID`.

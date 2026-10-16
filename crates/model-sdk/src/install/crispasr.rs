@@ -132,6 +132,46 @@ impl ModelSdk {
         mirror: bool,
         task: &TaskControl,
     ) -> Result<PathBuf, String> {
+        if let Some(spec) = resources::wd14_spec(id) {
+            let dir = self.root().join("models/wd14").join(id);
+            fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+            for (name, size, hash) in [
+                ("model.onnx", spec.size, spec.sha256),
+                ("selected_tags.csv", spec.csv_size, spec.csv_sha256),
+            ] {
+                task.check_cancelled()?;
+                let path = dir.join(name);
+                if path
+                    .metadata()
+                    .is_ok_and(|meta| meta.is_file() && meta.len() == size)
+                    && super::verify_sha256(&path, hash).is_ok()
+                {
+                    continue;
+                }
+                let staged = dir.join(format!("{name}.download"));
+                let result = (|| {
+                    download_to(
+                        &resources::wd14_url(spec, name, mirror),
+                        &staged,
+                        "model",
+                        task,
+                    )?;
+                    if staged.metadata().map_err(|error| error.to_string())?.len() != size {
+                        return Err(format!("模型文件大小不符: {name}"));
+                    }
+                    super::verify_sha256(&staged, hash)?;
+                    replace_file(&staged, &path)
+                })();
+                if result.is_err() {
+                    let _ = fs::remove_file(&staged);
+                }
+                result?;
+            }
+            resources::verify_wd14_model(&dir, spec)?;
+            self.clear_model_override(id)?;
+            task.progress("model", 100, "WD-14 模型已就绪");
+            return Ok(dir);
+        }
         if id == resources::OPENVINO_MODEL_ID {
             return self.download_openvino_model(mirror, task);
         }

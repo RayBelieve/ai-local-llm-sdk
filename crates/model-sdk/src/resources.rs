@@ -358,6 +358,149 @@ pub const MODELS: &[ModelSpec] = &[
     },
 ];
 
+pub struct Wd14Spec {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub revision: &'static str,
+    pub size: u64,
+    pub sha256: &'static str,
+    pub csv_size: u64,
+    pub csv_sha256: &'static str,
+    pub profile: ModelProfile,
+}
+
+// Fixed Hugging Face revisions and SHA-256 digests for both files in each model.
+pub const WD14_MODELS: &[Wd14Spec] = &[
+    Wd14Spec {
+        id: "wd-v1-4-moat-tagger-v2",
+        label: "WD 1.4 MoAT v2",
+        revision: "8452cddf280b952281b6e102411c50e981cb2908",
+        size: 326_197_340,
+        sha256: "b8cef913be4c9e8d93f9f903e74271416502ce0b4b04df0ff1e2f00df488aa03",
+        csv_size: 253_906,
+        csv_sha256: "8c8750600db36233a1b274ac88bd46289e588b338218c2e4c62bbc9f2b516368",
+        profile: ModelProfile::Wd14V2,
+    },
+    Wd14Spec {
+        id: "wd-v1-4-swinv2-tagger-v2",
+        label: "WD 1.4 SwinV2 v2",
+        revision: "cdb0c7fdc70646f0af29c6f80f8df564344a69b6",
+        size: 455_409_152,
+        sha256: "04ec04fdf7db74b4fed7f4b52f52e04dec4dbad9e4d88d2d178f334079a29fde",
+        csv_size: 253_906,
+        csv_sha256: "8c8750600db36233a1b274ac88bd46289e588b338218c2e4c62bbc9f2b516368",
+        profile: ModelProfile::Wd14V2,
+    },
+    Wd14Spec {
+        id: "wd-v1-4-convnext-tagger-v2",
+        label: "WD 1.4 ConvNeXt v2",
+        revision: "4b34d1b07bdd8e95494072648960b8a6adcbc0ff",
+        size: 387_820_405,
+        sha256: "71f06ecb7b9df81d8f271da4d43997ea2ed363cdac29aa64fcb256c9631e656a",
+        csv_size: 253_906,
+        csv_sha256: "8c8750600db36233a1b274ac88bd46289e588b338218c2e4c62bbc9f2b516368",
+        profile: ModelProfile::Wd14V2,
+    },
+    Wd14Spec {
+        id: "wd-v1-4-vit-tagger-v2",
+        label: "WD 1.4 ViT v2",
+        revision: "1f3f3e8ae769634e31e1ef696df11ec37493e4f2",
+        size: 373_287_959,
+        sha256: "8a21cadd1f88a095094cafbffe3028c3cc3d97f4d58c54344c5994bcf48e24ac",
+        csv_size: 253_906,
+        csv_sha256: "8c8750600db36233a1b274ac88bd46289e588b338218c2e4c62bbc9f2b516368",
+        profile: ModelProfile::Wd14V2,
+    },
+    Wd14Spec {
+        id: "wd-v1-4-convnextv2-tagger-v2",
+        label: "WD 1.4 ConvNeXtV2 v2",
+        revision: "dbd4dbe553ee51feb3bc745b614fb762080e3912",
+        size: 388_479_878,
+        sha256: "e91daa19cd9e8725125b7d70702d1560855fb687f8d8c4218eddaa821f41834a",
+        csv_size: 253_906,
+        csv_sha256: "8c8750600db36233a1b274ac88bd46289e588b338218c2e4c62bbc9f2b516368",
+        profile: ModelProfile::Wd14V2,
+    },
+    Wd14Spec {
+        id: "wd-swinv2-tagger-v3",
+        label: "WD SwinV2 v3",
+        revision: "627aef95638667ddcaa3ac8ae625e88ea5b02f51",
+        size: 467_460_978,
+        sha256: "e6774bff34d43bd49f75a47db4ef217dce701c9847b546523eb85ff6dbba1db1",
+        csv_size: 308_468,
+        csv_sha256: "298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217",
+        profile: ModelProfile::Wd14V3,
+    },
+    Wd14Spec {
+        id: "wd-convnext-tagger-v3",
+        label: "WD ConvNeXt v3",
+        revision: "d39e46de298d27340111b64965e20b8185c407e6",
+        size: 394_990_732,
+        sha256: "1b8a7abf13d9b8368267df47501d523789c4aeae66b2296ad98483239dfa32eb",
+        csv_size: 308_468,
+        csv_sha256: "298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217",
+        profile: ModelProfile::Wd14V3,
+    },
+    Wd14Spec {
+        id: "wd-vit-tagger-v3",
+        label: "WD ViT v3",
+        revision: "7f6b584d0bd3f55c4531f14ba3d4761b2bccdc0f",
+        size: 378_536_310,
+        sha256: "35f23693620b668f4d53fd3c62bf65e40af739bc52c7eb0fbc49258b58d065b6",
+        csv_size: 308_468,
+        csv_sha256: "298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217",
+        profile: ModelProfile::Wd14V3,
+    },
+    Wd14Spec {
+        id: "wd-eva02-large-tagger-v3",
+        label: "WD EVA02 Large v3",
+        revision: "b25b82a03f7282e41aa2f257a52c7583b710bd1c",
+        size: 1_260_435_999,
+        sha256: "9e768793060c7939b277ccb382783e8670e8a042d29d77aa736be0c8cc898bfc",
+        csv_size: 308_468,
+        csv_sha256: "298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217",
+        profile: ModelProfile::Wd14V3,
+    },
+];
+
+pub fn wd14_spec(id: &str) -> Option<&'static Wd14Spec> {
+    WD14_MODELS.iter().find(|spec| spec.id == id)
+}
+
+pub fn wd14_url(spec: &Wd14Spec, file: &str, mirror: bool) -> String {
+    let host = if mirror {
+        "https://hf-mirror.com"
+    } else {
+        "https://huggingface.co"
+    };
+    format!(
+        "{host}/SmilingWolf/{}/resolve/{}/{file}",
+        spec.id, spec.revision
+    )
+}
+
+pub fn verify_wd14_model(path: &Path, spec: &Wd14Spec) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err("请选择包含 model.onnx 与 selected_tags.csv 的 WD-14 模型目录。".into());
+    }
+    for (name, size, hash) in [
+        ("model.onnx", spec.size, spec.sha256),
+        ("selected_tags.csv", spec.csv_size, spec.csv_sha256),
+    ] {
+        let file = path.join(name);
+        if file
+            .metadata()
+            .map_err(|_| format!("模型缺少 {name}"))?
+            .len()
+            != size
+        {
+            return Err(format!("模型文件大小不符: {name}"));
+        }
+        crate::install::verify_sha256(&file, hash)?;
+    }
+    Ok(())
+}
+
 pub fn engine_spec(id: &str) -> Result<&'static EngineSpec, String> {
     ENGINES
         .iter()
@@ -618,6 +761,53 @@ mod tests {
             assert!(url.ends_with(spec.file));
             assert_eq!(spec.task, TaskKind::ObjectDetection);
         }
+    }
+
+    #[test]
+    fn wd14_catalog_uses_pinned_pair_of_files() {
+        assert_eq!(WD14_MODELS.len(), 9);
+        for spec in WD14_MODELS {
+            for file in ["model.onnx", "selected_tags.csv"] {
+                assert!(wd14_url(spec, file, false).contains(spec.revision));
+                assert!(wd14_url(spec, file, true).starts_with("https://hf-mirror.com/"));
+            }
+            assert_eq!(spec.sha256.len(), 64);
+            assert_eq!(spec.csv_sha256.len(), 64);
+        }
+        let spec = wd14_spec("wd-swinv2-tagger-v3").unwrap();
+        let dir = std::env::temp_dir().join(format!("wd14-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        assert!(verify_wd14_model(&dir, spec)
+            .unwrap_err()
+            .contains("model.onnx"));
+        fs::write(dir.join("model.onnx"), b"wrong").unwrap();
+        assert!(verify_wd14_model(&dir, spec)
+            .unwrap_err()
+            .contains("大小不符"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn wd14_offline_directory_requires_both_matching_files() {
+        let spec = Wd14Spec {
+            id: "test",
+            label: "test",
+            revision: "test",
+            profile: ModelProfile::Wd14V3,
+            size: 1,
+            sha256: "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            csv_size: 1,
+            csv_sha256: "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+        };
+        let dir = std::env::temp_dir().join(format!("wd14-pair-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("model.onnx"), b"a").unwrap();
+        assert!(verify_wd14_model(&dir, &spec).is_err());
+        fs::write(dir.join("selected_tags.csv"), b"b").unwrap();
+        verify_wd14_model(&dir, &spec).unwrap();
+        fs::write(dir.join("selected_tags.csv"), b"c").unwrap();
+        assert!(verify_wd14_model(&dir, &spec).is_err());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

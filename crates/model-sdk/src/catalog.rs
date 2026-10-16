@@ -6,6 +6,7 @@ pub enum TaskKind {
     Transcription,
     TextGeneration,
     ObjectDetection,
+    ImageTagging,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -32,4 +33,6 @@ pub enum ModelProfile {
     YoloV8Detect,
     #[serde(rename = "yolo11-detect")]
     Yolo11Detect,
+    Wd14V2,
+    Wd14V3,
 }

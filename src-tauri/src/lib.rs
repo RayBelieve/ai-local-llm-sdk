@@ -6,7 +6,8 @@ use std::{
 
 use model_sdk::{
     task::TaskControl, ChatMessage, ChatRole, DetectionOptions, DetectionResult, EngineInfo,
-    GenerationOptions, InstalledModel, ModelSdk, Readiness, TaskKind, TranscriptionOptions,
+    GenerationOptions, InstalledModel, ModelSdk, Readiness, TagResult, TaskKind,
+    TranscriptionOptions,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -412,6 +413,19 @@ async fn test_detect(
 }
 
 #[tauri::command]
+async fn test_tag(
+    app: tauri::AppHandle,
+    engine_id: String,
+    model_id: String,
+    image_path: String,
+) -> Result<TagResult, String> {
+    run_task(app, move |sdk, task| {
+        sdk.tag_image(&engine_id, &model_id, Path::new(&image_path), &task)
+    })
+    .await
+}
+
+#[tauri::command]
 fn cancel_task(app: tauri::AppHandle) -> Result<(), String> {
     let control = app
         .state::<AppState>()
@@ -449,6 +463,7 @@ pub fn run() {
             test_transcribe,
             test_generate,
             test_detect,
+            test_tag,
             cancel_task,
             stop_generation,
         ])

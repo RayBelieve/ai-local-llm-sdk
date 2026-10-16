@@ -45,7 +45,7 @@ pub struct EngineInfo {
     pub path: Option<PathBuf>,
     pub suitable: bool,
     pub reason: Option<String>,
-    pub task: TaskKind,
+    pub tasks: Vec<TaskKind>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -154,6 +154,15 @@ impl ModelSdk {
     }
 
     pub(crate) fn descriptor(id: &str) -> Result<ModelDescriptor, String> {
+        if let Some(spec) = resources::wd14_spec(id) {
+            return Ok(ModelDescriptor {
+                id: spec.id.into(),
+                label: spec.label.into(),
+                profile: spec.profile,
+                artifact_format: ArtifactFormat::Onnx,
+                task: TaskKind::ImageTagging,
+            });
+        }
         if id == resources::OPENVINO_MODEL_ID {
             return Ok(ModelDescriptor {
                 id: id.into(),
@@ -182,6 +191,14 @@ impl ModelSdk {
                 path: self.model_path_with(&registry, spec.id),
                 descriptor,
                 size_bytes: Some(spec.size),
+                downloadable: true,
+            });
+        }
+        for spec in resources::WD14_MODELS {
+            models.push(InstalledModel {
+                descriptor: Self::descriptor(spec.id)?,
+                path: self.model_path_with(&registry, spec.id),
+                size_bytes: Some(spec.size + spec.csv_size),
                 downloadable: true,
             });
         }
@@ -235,7 +252,7 @@ impl ModelSdk {
                     path,
                     suitable,
                     reason,
-                    task: adapter.task,
+                    tasks: adapter.tasks.to_vec(),
                 })
             })
             .collect()
@@ -276,6 +293,8 @@ impl ModelSdk {
         let registered = registry.model_paths.get(id).map(PathBuf::from);
         let managed = if id == resources::OPENVINO_MODEL_ID {
             self.root.join("models/openvino/qwen3_asr_int8")
+        } else if resources::wd14_spec(id).is_some() {
+            self.root.join("models/wd14").join(id)
         } else {
             self.root
                 .join("models")
@@ -288,7 +307,9 @@ impl ModelSdk {
     }
 
     fn validate_model(id: &str, path: &Path) -> Result<(), String> {
-        if id == resources::OPENVINO_MODEL_ID {
+        if let Some(spec) = resources::wd14_spec(id) {
+            resources::verify_wd14_model(path, spec)
+        } else if id == resources::OPENVINO_MODEL_ID {
             resources::verify_openvino_model(path)?;
             for (name, hash) in resources::OPENVINO_MODEL_HASHES {
                 crate::install::verify_sha256(&path.join(name), hash)?;
@@ -402,13 +423,17 @@ mod tests {
     fn catalog_compatibility_is_profile_format_and_task_specific() {
         let sdk = temp_sdk("compatibility");
         assert_eq!(engines::ADAPTERS.len(), 11);
-        assert_eq!(sdk.models().unwrap().len(), resources::MODELS.len() + 1);
+        assert_eq!(
+            sdk.models().unwrap().len(),
+            resources::MODELS.len() + resources::WD14_MODELS.len() + 1
+        );
         for model in sdk.models().unwrap() {
             for engine in engines::ADAPTERS {
                 for task in [
                     TaskKind::Transcription,
                     TaskKind::TextGeneration,
                     TaskKind::ObjectDetection,
+                    TaskKind::ImageTagging,
                 ] {
                     let expected = match engine.family {
                         Family::CrispAsr => {
@@ -436,14 +461,16 @@ mod tests {
                                 && model.descriptor.id == resources::HY_MT_MODEL_ID
                         }
                         Family::OnnxRuntime => {
-                            task == TaskKind::ObjectDetection
+                            (task == TaskKind::ObjectDetection
                                 && [
                                     "yolov8n-det-fp32",
                                     "yolov8s-det-fp32",
                                     "yolo11n-det-fp32",
                                     "yolo11s-det-fp32",
                                 ]
-                                .contains(&model.descriptor.id.as_str())
+                                .contains(&model.descriptor.id.as_str()))
+                                || (task == TaskKind::ImageTagging
+                                    && resources::wd14_spec(&model.descriptor.id).is_some())
                         }
                     };
                     assert_eq!(
@@ -506,6 +533,17 @@ mod tests {
             yolo.artifact_format,
             TaskKind::TextGeneration
         ));
+        let wd14 = ModelSdk::descriptor("wd-swinv2-tagger-v3").unwrap();
+        assert!(engines::get("onnxruntime-cpu").unwrap().supports(
+            wd14.profile,
+            wd14.artifact_format,
+            wd14.task
+        ));
+        assert!(!engines::get("onnxruntime-cpu").unwrap().supports(
+            wd14.profile,
+            wd14.artifact_format,
+            TaskKind::ObjectDetection
+        ));
     }
 
     #[test]
@@ -559,7 +597,7 @@ mod tests {
             b"{ invalid application data",
         )
         .unwrap();
-        assert_eq!(sdk.models().unwrap().len(), 16);
+        assert_eq!(sdk.models().unwrap().len(), 25);
         fs::write(
             sdk.root().join("sdk-resources.json"),
             br#"{"enginePaths":{},"modelPaths":{}}"#,
@@ -573,7 +611,7 @@ mod tests {
         .unwrap();
         assert!(sdk.models().unwrap_err().contains("版本不兼容"));
         sdk.save_registry(&Registry::default()).unwrap();
-        assert_eq!(sdk.models().unwrap().len(), 16);
+        assert_eq!(sdk.models().unwrap().len(), 25);
         let _ = fs::remove_dir_all(sdk.root());
     }
 

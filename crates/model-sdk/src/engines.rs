@@ -13,6 +13,7 @@ use crate::{
     resources,
     sdk::ModelSdk,
     subtitle::Segment,
+    tag::TagResult,
     task::TaskControl,
 };
 
@@ -28,7 +29,7 @@ pub(crate) struct Adapter {
     pub id: &'static str,
     pub family: Family,
     pub variant: &'static str,
-    pub task: TaskKind,
+    pub tasks: &'static [TaskKind],
 }
 
 pub(crate) const ADAPTERS: &[Adapter] = &[
@@ -36,67 +37,67 @@ pub(crate) const ADAPTERS: &[Adapter] = &[
         id: "crispasr-vulkan",
         family: Family::CrispAsr,
         variant: "vulkan",
-        task: TaskKind::Transcription,
+        tasks: &[TaskKind::Transcription],
     },
     Adapter {
         id: "crispasr-cuda12",
         family: Family::CrispAsr,
         variant: "cuda12",
-        task: TaskKind::Transcription,
+        tasks: &[TaskKind::Transcription],
     },
     Adapter {
         id: "crispasr-cuda13",
         family: Family::CrispAsr,
         variant: "cuda13",
-        task: TaskKind::Transcription,
+        tasks: &[TaskKind::Transcription],
     },
     Adapter {
         id: "crispasr-cpu",
         family: Family::CrispAsr,
         variant: "cpu",
-        task: TaskKind::Transcription,
+        tasks: &[TaskKind::Transcription],
     },
     Adapter {
         id: "crispasr-cpu-legacy",
         family: Family::CrispAsr,
         variant: "cpu-legacy",
-        task: TaskKind::Transcription,
+        tasks: &[TaskKind::Transcription],
     },
     Adapter {
         id: resources::OPENVINO_ENGINE_ID,
         family: Family::OpenVino,
         variant: "cpu",
-        task: TaskKind::Transcription,
+        tasks: &[TaskKind::Transcription],
     },
     Adapter {
         id: "llama-cpu",
         family: Family::Llama,
         variant: "cpu",
-        task: TaskKind::TextGeneration,
+        tasks: &[TaskKind::TextGeneration],
     },
     Adapter {
         id: "llama-vulkan",
         family: Family::Llama,
         variant: "vulkan",
-        task: TaskKind::TextGeneration,
+        tasks: &[TaskKind::TextGeneration],
     },
     Adapter {
         id: "llama-cuda12",
         family: Family::Llama,
         variant: "cuda12",
-        task: TaskKind::TextGeneration,
+        tasks: &[TaskKind::TextGeneration],
     },
     Adapter {
         id: "llama-cuda13",
         family: Family::Llama,
         variant: "cuda13",
-        task: TaskKind::TextGeneration,
+        tasks: &[TaskKind::TextGeneration],
     },
     Adapter {
         id: "onnxruntime-cpu",
         family: Family::OnnxRuntime,
         variant: "cpu",
-        task: TaskKind::ObjectDetection,
+        tasks: &[TaskKind::ObjectDetection, TaskKind::ImageTagging],
     },
 ];
 
@@ -125,12 +126,12 @@ pub(crate) fn get(id: &str) -> Result<&'static Adapter, String> {
 
 impl Adapter {
     pub fn supports(&self, profile: ModelProfile, format: ArtifactFormat, task: TaskKind) -> bool {
-        self.task == task
+        self.tasks.contains(&task)
             && match self.family {
                 Family::CrispAsr => crispasr::supports(profile, format),
                 Family::OpenVino => openvino::supports(profile, format),
                 Family::Llama => llama::supports(profile, format),
-                Family::OnnxRuntime => onnxruntime::supports(profile, format),
+                Family::OnnxRuntime => onnxruntime::supports(profile, format, task),
             }
     }
 
@@ -246,6 +247,20 @@ impl Adapter {
         match self.family {
             Family::OnnxRuntime => onnxruntime::detect(sdk, engine, model, image, options, task),
             _ => Err("所选引擎不支持目标检测。".into()),
+        }
+    }
+
+    pub fn tag(
+        &self,
+        sdk: &ModelSdk,
+        engine: &Path,
+        model: &Path,
+        image: &Path,
+        task: &TaskControl,
+    ) -> Result<TagResult, String> {
+        match self.family {
+            Family::OnnxRuntime => onnxruntime::tag(sdk, engine, model, image, task),
+            _ => Err("所选引擎不支持图片打标。".into()),
         }
     }
 }
@@ -411,11 +426,18 @@ pub(crate) mod onnxruntime {
 
     static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(0);
 
-    pub fn supports(profile: ModelProfile, format: ArtifactFormat) -> bool {
-        matches!(
-            profile,
-            ModelProfile::YoloV8Detect | ModelProfile::Yolo11Detect
-        ) && format == ArtifactFormat::Onnx
+    pub fn supports(profile: ModelProfile, format: ArtifactFormat, task: TaskKind) -> bool {
+        format == ArtifactFormat::Onnx
+            && matches!(
+                (profile, task),
+                (
+                    ModelProfile::YoloV8Detect | ModelProfile::Yolo11Detect,
+                    TaskKind::ObjectDetection
+                ) | (
+                    ModelProfile::Wd14V2 | ModelProfile::Wd14V3,
+                    TaskKind::ImageTagging
+                )
+            )
     }
 
     pub fn managed_path(root: &Path) -> PathBuf {
@@ -440,10 +462,12 @@ pub(crate) mod onnxruntime {
 
     pub fn probe(python: &Path, model: Option<(&Path, ModelProfile)>) -> Result<(), String> {
         let mut command = hidden_command(python);
-        if let Some((model, _)) = model {
-            command
-                .args(["-c", "import json,onnxruntime as o,sys; s=o.InferenceSession(sys.argv[1],providers=['CPUExecutionProvider']); assert s.get_inputs()[0].shape == [1,3,640,640]; assert s.get_outputs()[0].shape == [1,84,8400]; assert len(json.loads(s.get_modelmeta().custom_metadata_map['labels'])) == 80"])
-                .arg(model);
+        if let Some((model, profile)) = model {
+            if matches!(profile, ModelProfile::Wd14V2 | ModelProfile::Wd14V3) {
+                command.args(["-c", "import csv,onnxruntime as o,sys; from pathlib import Path; p=Path(sys.argv[1]); s=o.InferenceSession(str(p/'model.onnx'),providers=['CPUExecutionProvider']); i=s.get_inputs()[0].shape; rows=list(csv.DictReader((p/'selected_tags.csv').open(encoding='utf-8'))); assert len(i)==4 and i[1]==i[2] and i[3]==3; assert len(s.get_outputs())==1 and s.get_outputs()[0].shape[-1]==len(rows); assert rows and all(k in rows[0] for k in ('name','category'))"]).arg(model);
+            } else {
+                command.args(["-c", "import json,onnxruntime as o,sys; s=o.InferenceSession(sys.argv[1],providers=['CPUExecutionProvider']); assert s.get_inputs()[0].shape == [1,3,640,640]; assert s.get_outputs()[0].shape == [1,84,8400]; assert len(json.loads(s.get_modelmeta().custom_metadata_map['labels'])) == 80"]).arg(model);
+            }
         } else {
             command.args(["-c", "import onnxruntime, numpy, PIL"]);
         }
@@ -522,6 +546,73 @@ pub(crate) mod onnxruntime {
                 serde_json::from_slice(&fs::read(output).map_err(|error| error.to_string())?)
                     .map_err(|error| format!("检测结果无效: {error}"))?;
             task.progress("detect", 100, "图片检测完成");
+            Ok(result)
+        })();
+        let _ = fs::remove_dir_all(job);
+        result
+    }
+
+    pub fn tag(
+        sdk: &ModelSdk,
+        python: &Path,
+        model: &Path,
+        image: &Path,
+        task: &TaskControl,
+    ) -> Result<TagResult, String> {
+        let worker_dir = sdk.root().join("workers/onnxruntime");
+        fs::create_dir_all(&worker_dir).map_err(|error| error.to_string())?;
+        let worker = worker_dir.join("tag_worker.py");
+        let contents = include_bytes!("../workers/onnxruntime/tag_worker.py");
+        if !fs::read(&worker).is_ok_and(|current| current == contents) {
+            fs::write(&worker, contents).map_err(|error| error.to_string())?;
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_nanos();
+        let job = sdk.root().join("jobs").join(format!(
+            "tag-{}-{nonce}-{}",
+            std::process::id(),
+            NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&job).map_err(|error| error.to_string())?;
+        let output = job.join("result.json");
+        let log = job.join("worker.log");
+        let result = (|| {
+            let mut command = hidden_command(python);
+            command
+                .arg(&worker)
+                .arg("--model")
+                .arg(model)
+                .arg("--image")
+                .arg(image)
+                .arg("--output")
+                .arg(&output)
+                .stdout(Stdio::null())
+                .stderr(Stdio::from(
+                    File::create(&log).map_err(|error| error.to_string())?,
+                ));
+            task.progress("tag", 0, "正在分析图片标签");
+            let status = task.run(command)?;
+            if !status.success() {
+                let detail = fs::read_to_string(&log).unwrap_or_default();
+                return Err(format!(
+                    "图片打标失败 ({status}): {}",
+                    detail
+                        .chars()
+                        .rev()
+                        .take(1000)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>()
+                ));
+            }
+            task.check_cancelled()?;
+            let result =
+                serde_json::from_slice(&fs::read(output).map_err(|error| error.to_string())?)
+                    .map_err(|error| format!("打标结果无效: {error}"))?;
+            task.progress("tag", 100, "图片打标完成");
             Ok(result)
         })();
         let _ = fs::remove_dir_all(job);

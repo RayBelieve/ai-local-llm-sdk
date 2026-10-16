@@ -12,6 +12,7 @@ mod provider;
 pub mod resources;
 mod sdk;
 pub mod subtitle;
+mod tag;
 pub mod task;
 
 pub use catalog::{ArtifactFormat, ModelProfile, TaskKind};
@@ -19,3 +20,4 @@ pub use detect::{Detection, DetectionOptions, DetectionResult};
 pub use generate::{ChatMessage, ChatRole, GenerationOptions};
 pub use infer::TranscriptionOptions;
 pub use sdk::{EngineInfo, InstalledModel, ModelDescriptor, ModelSdk, Readiness};
+pub use tag::{TagResult, TagScore};

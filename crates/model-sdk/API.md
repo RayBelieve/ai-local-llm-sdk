@@ -4,14 +4,14 @@
 
 ## 目录类型
 
-- `TaskKind::Transcription`：语音转写；`TaskKind::TextGeneration`：文本生成；`TaskKind::ObjectDetection`：图片目标检测。
+- `TaskKind::Transcription`：语音转写；`TaskKind::TextGeneration`：文本生成；`TaskKind::ObjectDetection`：图片目标检测；`TaskKind::ImageTagging`：图片打标。
 - `ArtifactFormat::Ggml`、`Gguf`、`OpenVinoIr`、`Onnx`：权重的文件格式，不编码 provider。
-- `ModelProfile::Whisper`、`Qwen3Asr17b`、`Qwen3Asr06b`、`HyMt15`、`YoloV8Detect`、`Yolo11Detect`：模型架构及推理协议。格式相同不代表适配器一定支持。
+- `ModelProfile::Whisper`、`Qwen3Asr17b`、`Qwen3Asr06b`、`HyMt15`、`YoloV8Detect`、`Yolo11Detect`、`Wd14V2`、`Wd14V3`：模型架构及推理协议。格式相同不代表适配器一定支持。
 - `ModelDescriptor`：`id`、`label`、`profile`、`artifact_format`、`task`。
 - `InstalledModel`：`descriptor`、已验证的 `path`、`size_bytes`、`downloadable`；没有唯一 provider 字段。
-- `EngineInfo`：`id`、`family`、`variant`、`label`、`version`、`download_mb`、`path`、`suitable`、`reason`、`task`。
+- `EngineInfo`：`id`、`family`、`variant`、`label`、`version`、`download_mb`、`path`、`suitable`、`reason`、`tasks`。一个运行时可以支持多个任务。
 
-现有模型为 15 个文件模型加 1 个 OpenVINO IR 目录模型。Whisper GGML 共 6 份；Qwen3-ASR 1.7B GGUF 共 4 份；HY-MT1.5 GGUF 共 1 份；Qwen3-ASR 0.6B INT8 OpenVINO IR 共 1 份；YOLOv8/YOLO11 检测 ONNX 各有 Nano、Small 两份。
+现有模型为 15 个单文件模型、1 个 OpenVINO IR 目录模型及 9 个 WD-14 双文件目录模型。Whisper GGML 共 6 份；Qwen3-ASR 1.7B GGUF 共 4 份；HY-MT1.5 GGUF 共 1 份；Qwen3-ASR 0.6B INT8 OpenVINO IR 共 1 份；YOLOv8/YOLO11 检测 ONNX 各有 Nano、Small 两份；WD-14 提供 5 款 v2 和 4 款 v3。
 
 ## 引擎 ID
 
@@ -49,12 +49,15 @@
 - `generate_chat_stream(engine_id, model_id, messages, options, task, on_delta)`：逐段回调，成功时也返回完整文本。
 - `stop_text_generation()`：关闭当前 SDK 实例持有的 llama.cpp 服务。
 - `detect_objects(engine_id, model_id, image, &DetectionOptions, task) -> DetectionResult`：单张图片目标检测。`DetectionOptions` 包含置信度阈值（默认 0.25）、NMS IoU 阈值（默认 0.45）和最大目标数（默认 100）。结果含图片宽高，以及类别 ID/名称、置信度与原图像素坐标 `x1,y1,x2,y2`。
+- `tag_image(engine_id, model_id, image, task) -> TagResult`：单张图片 WD-14 打标。`ratings` 返回四项评级；`tags` 返回 CSV 中其余全部标签。每项包含原始英文 `name`、数值 `category`、未经阈值筛选的 `score`。SDK 不翻译、不拼接提示词，也不筛选或排序标签。
 
 `TaskControl` 提供进度回调和取消；`cancel()` 会终止正在运行的子进程，并中断进行中的下载连接。音频处理、模型探测和生成调用也会检查取消状态。直接传入任意引擎及模型路径进行推理的公开入口已移除。
 
 OpenVINO worker、VAD 与 ForcedAligner 的安装和离线导入辅助接口仍可由 `ModelSdk` 使用；FFmpeg 可用 `install_ffmpeg(task)` 安装。真实推理需本机资源，见忽略的 `tests/smoke.rs`。
 
 首批检测模型 ID 为 `yolov8n-det-fp32`、`yolov8s-det-fp32`、`yolo11n-det-fp32`、`yolo11s-det-fp32`。权重来自 EdgeFirst Model Zoo 的固定提交，按大小和 SHA-256 验证，包含 COCO 80 类标签元数据；输入为 640×640 RGB FP32，输出为归一化检测框，SDK 执行 letterbox、坐标还原和按类别 NMS。`onnxruntime-cpu` 在 Windows x86-64 可自动安装独立的 Python/ONNX Runtime 环境，其他平台可登记已装齐 `onnxruntime`、`numpy`、`Pillow` 的 Python。模型标记为 AGPL-3.0，分发前需核对其许可证要求。桌面调试台提供独立的图片检测调用。
+
+WD-14 模型 ID 与 SmilingWolf 仓库名相同：`wd-v1-4-moat-tagger-v2`、`wd-v1-4-swinv2-tagger-v2`、`wd-v1-4-convnext-tagger-v2`、`wd-v1-4-vit-tagger-v2`、`wd-v1-4-convnextv2-tagger-v2`、`wd-swinv2-tagger-v3`、`wd-convnext-tagger-v3`、`wd-vit-tagger-v3`、`wd-eva02-large-tagger-v3`。每款从固定提交下载 `model.onnx` 和 `selected_tags.csv`，两者都按大小与 SHA-256 验证；离线登记时传包含这两个文件的目录。共用 `onnxruntime-cpu`，输入图片按 EXIF 方向处理，透明区域铺白、补方形后以 BGR FP32 推理。桌面调试台展示评级、最高分标签预览和完整原始 JSON。
 
 ## 示例
 

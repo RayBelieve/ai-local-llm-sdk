@@ -10,11 +10,11 @@ import {
 } from "lucide-react";
 import "./style.css";
 
-type TaskKind = "transcription" | "text-generation" | "object-detection";
+type TaskKind = "transcription" | "text-generation" | "object-detection" | "image-tagging";
 type View = "resources" | TaskKind;
 type Engine = {
   id: string; family: string; variant: string; label: string; version: string;
-  downloadMb: number; path: string | null; suitable: boolean; reason: string | null; task: TaskKind;
+  downloadMb: number; path: string | null; suitable: boolean; reason: string | null; tasks: TaskKind[];
 };
 type Model = {
   descriptor: { id: string; label: string; profile: string; artifactFormat: string; task: TaskKind };
@@ -27,6 +27,8 @@ type Progress = { stage: string; percent: number; message: string };
 type Segment = { start: number; end: number; text: string };
 type Detection = { classId: number; label: string; confidence: number; x1: number; y1: number; x2: number; y2: number };
 type DetectionResult = { imageWidth: number; imageHeight: number; detections: Detection[] };
+type TagScore = { name: string; category: number; score: number };
+type TagResult = { ratings: TagScore[]; tags: TagScore[] };
 type Message = { role: "system" | "user" | "assistant"; content: string };
 type GenerateMode = "text" | "chat" | "stream";
 
@@ -34,11 +36,13 @@ const tasks: { id: TaskKind; label: string; method: string; icon: typeof AudioLi
   { id: "transcription", label: "语音转写", method: "transcribe_with_options", icon: AudioLines },
   { id: "text-generation", label: "文本生成", method: "generate_text / generate_chat", icon: MessageSquareText },
   { id: "object-detection", label: "目标检测", method: "detect_objects", icon: FileImage },
+  { id: "image-tagging", label: "图片打标", method: "tag_image", icon: FileImage },
 ];
 const emptyPairs: Record<TaskKind, Pair> = {
   transcription: { engineId: "", modelId: "" },
   "text-generation": { engineId: "", modelId: "" },
   "object-detection": { engineId: "", modelId: "" },
+  "image-tagging": { engineId: "", modelId: "" },
 };
 const languages = [["", "自动识别"], ["zh", "中文"], ["en", "English"], ["ja", "日本語"], ["ko", "한국어"], ["fr", "Français"], ["de", "Deutsch"], ["es", "Español"]];
 
@@ -71,6 +75,7 @@ function App() {
   const [imagePath, setImagePath] = useState("");
   const [segments, setSegments] = useState<Segment[] | null>(null);
   const [detection, setDetection] = useState<DetectionResult | null>(null);
+  const [tagResult, setTagResult] = useState<TagResult | null>(null);
   const [textOutput, setTextOutput] = useState<string | null>(null);
   const [language, setLanguage] = useState("");
   const [alignTimestamps, setAlignTimestamps] = useState(true);
@@ -94,7 +99,7 @@ function App() {
     setPairs((current) => {
       const updated = { ...current };
       for (const { id } of tasks) {
-        const engines = next.engines.filter((item) => item.task === id);
+        const engines = next.engines.filter((item) => item.tasks.includes(id));
         const models = next.models.filter((item) => item.descriptor.task === id);
         updated[id] = {
           engineId: engines.some((item) => item.id === current[id].engineId) ? current[id].engineId : engines[0]?.id || "",
@@ -159,7 +164,7 @@ function App() {
   async function register(kind: "engine" | "model" | "aligner") {
     try {
       const model = catalog?.models.find((item) => item.descriptor.id === pairs[resourceTask].modelId);
-      const path = await open({ directory: kind === "model" && model?.descriptor.artifactFormat === "openvino-ir", multiple: false });
+      const path = await open({ directory: kind === "model" && (model?.descriptor.artifactFormat === "openvino-ir" || model?.descriptor.task === "image-tagging"), multiple: false });
       if (typeof path !== "string") return;
       if (kind === "aligner") await resourceAction("register_local_aligner", { path }, "登记对齐模型");
       else if (kind === "engine") await resourceAction("register_local_engine", { engineId: pairs[resourceTask].engineId, path }, "登记引擎");
@@ -174,7 +179,7 @@ function App() {
         : [{ name: "音视频", extensions: ["mp4", "mov", "mkv", "webm", "mp3", "wav", "m4a", "aac", "flac", "ogg"] }] });
       if (typeof path !== "string") return;
       await invoke("allow_preview", { path });
-      if (kind === "image") { setImagePath(path); setDetection(null); }
+      if (kind === "image") { setImagePath(path); setDetection(null); setTagResult(null); }
       else { setMediaPath(path); setSegments(null); }
       setError("");
     } catch (reason) { setError(String(reason)); }
@@ -208,8 +213,16 @@ function App() {
     }), setDetection);
   }
 
+  async function runTagging() {
+    const pair = pairs["image-tagging"];
+    setTagResult(null);
+    await act("tag", () => invoke<TagResult>("test_tag", {
+      engineId: pair.engineId, modelId: pair.modelId, imagePath,
+    }), setTagResult);
+  }
+
   function pairFields(kind: TaskKind) {
-    const engines = catalog?.engines.filter((item) => item.task === kind) || [];
+    const engines = catalog?.engines.filter((item) => item.tasks.includes(kind)) || [];
     const models = catalog?.models.filter((item) => item.descriptor.task === kind) || [];
     const pair = pairs[kind];
     const engine = engines.find((item) => item.id === pair.engineId);
@@ -299,6 +312,10 @@ function App() {
             <button className="button" disabled={!desktop || !!busy} onClick={() => void act("stop", () => invoke<void>("stop_generation"), () => setNotice("生成服务已停止"))}><Square size={15} />停止服务</button></div>
         </section>}
 
+        {view === "image-tagging" && <section className="work-section"><div className="section-title"><h2>输入图片</h2></div>
+          <button className="file-picker" disabled={!!busy || !desktop} onClick={() => void pickInput("image")}><FolderOpen size={19} /><span>{imagePath ? fileName(imagePath) : "选择图片"}</span><small>{imagePath || "JPG、PNG、WebP、BMP"}</small></button>
+          <button className="button primary run-button" disabled={!!busy || !imagePath || !pairs["image-tagging"].engineId || !pairs["image-tagging"].modelId} onClick={() => void runTagging()}><Play size={16} />调用打标接口</button>
+        </section>}
         {view === "object-detection" && <section className="work-section"><div className="section-title"><h2>输入图片</h2></div>
           <button className="file-picker" disabled={!!busy || !desktop} onClick={() => void pickInput("image")}><FolderOpen size={19} /><span>{imagePath ? fileName(imagePath) : "选择图片"}</span><small>{imagePath || "JPG、PNG、WebP、BMP"}</small></button>
           <div className="field-grid options"><label className="field"><span>置信度阈值</span><input type="number" min={0} max={1} step={0.05} value={confidence} disabled={!!busy} onChange={(event) => setConfidence(Number(event.target.value))} /></label>
@@ -309,12 +326,13 @@ function App() {
       </main>
 
       <aside className="results"><div className="result-heading"><div><h2>{view === "resources" ? "目录概览" : "调用结果"}</h2><span>{view === "resources" ? "SDK catalog" : tasks.find((item) => item.id === view)?.method}</span></div>{busy && <LoaderCircle size={18} className="spin" />}</div>
-        {view === "resources" && <div className="inventory"><div className="summary-row"><div><strong>{catalog?.engines.filter((item) => item.task === resourceTask).length || 0}</strong><span>引擎版本</span></div><div><strong>{catalog?.models.filter((item) => item.descriptor.task === resourceTask).length || 0}</strong><span>内置模型</span></div></div><h3>引擎</h3>{catalog?.engines.filter((item) => item.task === resourceTask).map((item) => <div className="inventory-row" key={item.id}><div><strong>{item.label}</strong><code>{item.id}</code></div><span className={item.path ? "state ok" : "state"}>{item.path ? "已安装" : item.suitable ? "未安装" : "不可用"}</span></div>)}<h3>模型</h3>{catalog?.models.filter((item) => item.descriptor.task === resourceTask).map((item) => <div className="inventory-row" key={item.descriptor.id}><div><strong>{item.descriptor.label}</strong><code>{item.descriptor.id}</code></div><span className={item.path ? "state ok" : "state"}>{item.path ? "已登记" : "未登记"}</span></div>)}</div>}
+        {view === "resources" && <div className="inventory"><div className="summary-row"><div><strong>{catalog?.engines.filter((item) => item.tasks.includes(resourceTask)).length || 0}</strong><span>引擎版本</span></div><div><strong>{catalog?.models.filter((item) => item.descriptor.task === resourceTask).length || 0}</strong><span>内置模型</span></div></div><h3>引擎</h3>{catalog?.engines.filter((item) => item.tasks.includes(resourceTask)).map((item) => <div className="inventory-row" key={item.id}><div><strong>{item.label}</strong><code>{item.id}</code></div><span className={item.path ? "state ok" : "state"}>{item.path ? "已安装" : item.suitable ? "未安装" : "不可用"}</span></div>)}<h3>模型</h3>{catalog?.models.filter((item) => item.descriptor.task === resourceTask).map((item) => <div className="inventory-row" key={item.descriptor.id}><div><strong>{item.descriptor.label}</strong><code>{item.descriptor.id}</code></div><span className={item.path ? "state ok" : "state"}>{item.path ? "已登记" : "未登记"}</span></div>)}</div>}
         {view === "transcription" && <div className="result-body">{mediaUrl && (isAudio ? <audio controls src={mediaUrl} className="media-preview" /> : <video controls src={mediaUrl} className="media-preview" />)}{segments ? <><div className="result-count">{segments.length} 条结果</div><div className="segments">{segments.map((item, index) => <div className="segment" key={index}><time>{time(item.start)} – {time(item.end)}</time><p>{item.text}</p></div>)}</div><details><summary>原始返回值</summary><pre>{JSON.stringify(segments, null, 2)}</pre></details></> : <div className="empty-result"><AudioLines size={30} /><span>选择文件并调用转写接口</span></div>}</div>}
         {view === "text-generation" && <div className="result-body">{textOutput !== null ? <><pre className="generated-text">{textOutput || (busy ? "正在等待首段输出…" : "模型返回空文本")}</pre><details><summary>原始返回值</summary><pre>{JSON.stringify(textOutput)}</pre></details></> : <div className="empty-result"><MessageSquareText size={30} /><span>输入内容并调用生成接口</span></div>}</div>}
         {view === "object-detection" && <div className="result-body">{imageUrl && <div className="detection-image"><img src={imageUrl} alt={fileName(imagePath)} />{detection?.detections.map((item, index) => <div key={index} className="detection-box" style={{ left: `${item.x1 / detection.imageWidth * 100}%`, top: `${item.y1 / detection.imageHeight * 100}%`, width: `${(item.x2 - item.x1) / detection.imageWidth * 100}%`, height: `${(item.y2 - item.y1) / detection.imageHeight * 100}%` }}><span>{item.label} {(item.confidence * 100).toFixed(0)}%</span></div>)}</div>}{detection ? <><div className="result-count">{detection.detections.length} 个目标 · {detection.imageWidth} × {detection.imageHeight}</div><div className="detections">{detection.detections.map((item, index) => <div className="detection-row" key={index}><strong>{item.label}</strong><span>{(item.confidence * 100).toFixed(1)}%</span><code>{Math.round(item.x1)}, {Math.round(item.y1)} → {Math.round(item.x2)}, {Math.round(item.y2)}</code></div>)}</div><details><summary>原始返回值</summary><pre>{JSON.stringify(detection, null, 2)}</pre></details></> : <div className="empty-result"><FileImage size={30} /><span>选择图片并调用检测接口</span></div>}</div>}
+        {view === "image-tagging" && <div className="result-body">{imageUrl && <img className="media-preview" src={imageUrl} alt={fileName(imagePath)} />}{tagResult ? <><div className="result-count">{tagResult.tags.length} 个标签 · {tagResult.ratings.length} 个评级</div><h3>评级</h3><div className="detections">{tagResult.ratings.map((item) => <div className="detection-row" key={item.name}><strong>{item.name}</strong><span>{(item.score * 100).toFixed(2)}%</span></div>)}</div><h3>标签</h3><div className="detections">{[...tagResult.tags].sort((a, b) => b.score - a.score).slice(0, 40).map((item) => <div className="detection-row" key={`${item.category}-${item.name}`}><strong>{item.name}</strong><span>{(item.score * 100).toFixed(2)}%</span><code>category {item.category}</code></div>)}</div><details><summary>全部原始结果</summary><pre>{JSON.stringify(tagResult, null, 2)}</pre></details></> : <div className="empty-result"><FileImage size={30} /><span>选择图片并调用打标接口</span></div>}</div>}
       </aside></div>
-      {busy && <footer className="taskbar"><div><LoaderCircle size={16} className="spin" /><span>{progress?.message || "正在执行 SDK 调用"}</span><strong>{progress ? `${progress.percent}%` : ""}</strong></div>{["安装引擎", "下载模型", "install-ffmpeg", "下载对齐模型", "transcribe", "generate", "detect"].includes(busy) && <button className="button danger" onClick={() => void invoke("cancel_task").catch((reason) => setError(String(reason)))}><Square size={14} />取消</button>}</footer>}
+      {busy && <footer className="taskbar"><div><LoaderCircle size={16} className="spin" /><span>{progress?.message || "正在执行 SDK 调用"}</span><strong>{progress ? `${progress.percent}%` : ""}</strong></div>{["安装引擎", "下载模型", "install-ffmpeg", "下载对齐模型", "transcribe", "generate", "detect", "tag"].includes(busy) && <button className="button danger" onClick={() => void invoke("cancel_task").catch((reason) => setError(String(reason)))}><Square size={14} />取消</button>}</footer>}
     </div>
   </div>;
 }

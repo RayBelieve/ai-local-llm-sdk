@@ -7,6 +7,39 @@ use model_sdk::{
 const LLAMA_ENGINE_ID: &str = "llama-cpu";
 
 #[test]
+#[ignore = "requires a local WD-14 model directory, ONNX Runtime Python, and test image"]
+fn tags_image_with_wd14() {
+    let image = std::env::var("MODEL_SDK_WD14_IMAGE").unwrap();
+    let model = std::env::var("MODEL_SDK_WD14_MODEL").unwrap();
+    let engine = std::env::var("MODEL_SDK_WD14_ENGINE").unwrap();
+    let model_id =
+        std::env::var("MODEL_SDK_WD14_MODEL_ID").unwrap_or_else(|_| "wd-swinv2-tagger-v3".into());
+    let root = std::env::temp_dir().join(format!("model-sdk-wd14-smoke-{}", std::process::id()));
+    let sdk = ModelSdk::new(&root).unwrap();
+    sdk.register_local_engine("onnxruntime-cpu", Path::new(&engine))
+        .unwrap();
+    sdk.register_local_model(&model_id, Path::new(&model))
+        .unwrap();
+    let result = sdk
+        .tag_image(
+            "onnxruntime-cpu",
+            &model_id,
+            Path::new(&image),
+            &TaskControl::default(),
+        )
+        .unwrap();
+    assert_eq!(result.ratings.len(), 4);
+    assert!(!result.tags.is_empty());
+    assert!(result
+        .ratings
+        .iter()
+        .chain(&result.tags)
+        .all(|entry| entry.score.is_finite()));
+    drop(sdk);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 #[ignore = "requires a test image and either network access or local ONNX Runtime and YOLO weights"]
 fn detects_objects_with_yolo() {
     let image = std::env::var("MODEL_SDK_YOLO_IMAGE").unwrap();
