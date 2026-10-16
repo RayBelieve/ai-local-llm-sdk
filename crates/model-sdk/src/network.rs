@@ -74,8 +74,8 @@ pub fn apply_proxy_to_command(command: &mut Command) -> Result<(), String> {
     Ok(())
 }
 
-pub fn download_client() -> Result<reqwest::blocking::Client, String> {
-    let mut builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(1800));
+pub fn download_client() -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(1800));
     #[cfg(windows)]
     if !has_proxy_environment() {
         if let Some(address) = windows_proxy()? {
@@ -118,11 +118,18 @@ mod tests {
     #[test]
     #[ignore = "requires access to GitHub Releases"]
     fn release_connection_uses_configured_proxy() {
-        let response = super::download_client()
-            .unwrap()
-            .head("https://github.com/CrispStrobe/CrispASR/releases/download/v0.8.33/crispasr-windows-x86_64-cuda13.zip")
-            .send()
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .unwrap();
-        assert!(response.status().is_success());
+        runtime.block_on(async {
+            let response = super::download_client()
+                .unwrap()
+                .head("https://github.com/CrispStrobe/CrispASR/releases/download/v0.8.33/crispasr-windows-x86_64-cuda13.zip")
+                .send()
+                .await
+                .unwrap();
+            assert!(response.status().is_success());
+        });
     }
 }

@@ -19,6 +19,7 @@ impl ModelSdk {
         match engines::get(id)?.family {
             Family::Llama => return self.install_llama_variant(id, task),
             Family::OpenVino => return self.install_openvino_runtime(task),
+            Family::OnnxRuntime => return self.install_onnxruntime_runtime(task),
             Family::CrispAsr => {}
         }
         if !cfg!(target_os = "windows") || !cfg!(target_arch = "x86_64") {

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum TaskKind {
     Transcription,
     TextGeneration,
+    ObjectDetection,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -12,6 +13,7 @@ pub enum TaskKind {
 pub enum ArtifactFormat {
     Ggml,
     Gguf,
+    Onnx,
     #[serde(rename = "openvino-ir")]
     OpenVinoIr,
 }
@@ -26,4 +28,8 @@ pub enum ModelProfile {
     Qwen3Asr06b,
     #[serde(rename = "hy-mt-1.5")]
     HyMt15,
+    #[serde(rename = "yolov8-detect")]
+    YoloV8Detect,
+    #[serde(rename = "yolo11-detect")]
+    Yolo11Detect,
 }

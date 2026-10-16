@@ -1,530 +1,322 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
-  AudioLines,
-  FileAudio,
-  FileDown,
-  FileVideo,
-  FolderOpen,
-  LoaderCircle,
-  Languages,
-  Play,
-  Plus,
-  Scissors,
-  SlidersHorizontal,
-  Square,
-  Trash2,
+  AudioLines, Box, Check, CircleAlert, Cpu, Download, FileImage, FolderOpen,
+  LoaderCircle, MessageSquareText, Play, Plus, RefreshCw,
+  Square, Trash2, X,
 } from "lucide-react";
-import ResourcePanel, { type Progress, type ResourceStatus } from "./ResourcePanel";
 import "./style.css";
 
-type Segment = { start: number; end: number; text: string; translation?: string };
+type TaskKind = "transcription" | "text-generation" | "object-detection";
+type View = "resources" | TaskKind;
+type Engine = {
+  id: string; family: string; variant: string; label: string; version: string;
+  downloadMb: number; path: string | null; suitable: boolean; reason: string | null; task: TaskKind;
+};
+type Model = {
+  descriptor: { id: string; label: string; profile: string; artifactFormat: string; task: TaskKind };
+  path: string | null; sizeBytes: number | null; downloadable: boolean;
+};
+type Catalog = { storageDir: string; ffmpegPath: string; engines: Engine[]; models: Model[] };
+type Pair = { engineId: string; modelId: string };
+type PairCheck = { compatible?: boolean; ready?: boolean; reason?: string | null };
+type Progress = { stage: string; percent: number; message: string };
+type Segment = { start: number; end: number; text: string };
+type Detection = { classId: number; label: string; confidence: number; x1: number; y1: number; x2: number; y2: number };
+type DetectionResult = { imageWidth: number; imageHeight: number; detections: Detection[] };
+type Message = { role: "system" | "user" | "assistant"; content: string };
+type GenerateMode = "text" | "chat" | "stream";
 
-const languages = [
-  ["zh", "中文"], ["en", "English"], ["ja", "日本語"], ["ko", "한국어"],
-  ["yue", "粤语"], ["fr", "Français"], ["de", "Deutsch"], ["es", "Español"],
-  ["pt", "Português"], ["ru", "Русский"], ["ar", "العربية"], ["th", "ไทย"],
-  ["vi", "Tiếng Việt"], ["id", "Bahasa Indonesia"], ["ms", "Bahasa Melayu"],
-] as const;
+const tasks: { id: TaskKind; label: string; method: string; icon: typeof AudioLines }[] = [
+  { id: "transcription", label: "语音转写", method: "transcribe_with_options", icon: AudioLines },
+  { id: "text-generation", label: "文本生成", method: "generate_text / generate_chat", icon: MessageSquareText },
+  { id: "object-detection", label: "目标检测", method: "detect_objects", icon: FileImage },
+];
+const emptyPairs: Record<TaskKind, Pair> = {
+  transcription: { engineId: "", modelId: "" },
+  "text-generation": { engineId: "", modelId: "" },
+  "object-detection": { engineId: "", modelId: "" },
+};
+const languages = [["", "自动识别"], ["zh", "中文"], ["en", "English"], ["ja", "日本語"], ["ko", "한국어"], ["fr", "Français"], ["de", "Deutsch"], ["es", "Español"]];
 
-function fileName(path: string) {
-  return path.split(/[\\/]/).pop() || path;
+function fileName(path: string) { return path.split(/[\\/]/).pop() || path; }
+function time(seconds: number) {
+  const value = Math.round(seconds * 1000);
+  const h = Math.floor(value / 3600000);
+  const m = Math.floor(value / 60000) % 60;
+  const s = Math.floor(value / 1000) % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(value % 1000).padStart(3, "0")}`;
 }
-
-function displayTime(seconds: number) {
-  const total = Math.max(0, Math.round(seconds * 1000));
-  return `${String(Math.floor(total / 3600000)).padStart(2, "0")}:${String(Math.floor(total / 60000) % 60).padStart(2, "0")}:${String(Math.floor(total / 1000) % 60).padStart(2, "0")}.${String(total % 1000).padStart(3, "0")}`;
-}
-
-function parseTime(value: string) {
-  const match = value.trim().match(/^(\d+):(\d{2}):(\d{2})[.,](\d{1,3})$/);
-  if (!match) return null;
-  const [, hours, minutes, seconds, millis] = match;
-  if (+minutes > 59 || +seconds > 59) return null;
-  return (
-    +hours * 3600 + +minutes * 60 + +seconds + +millis.padEnd(3, "0") / 1000
-  );
+function size(bytes: number | null) {
+  return bytes == null ? "" : `${(bytes / 1_000_000).toFixed(bytes > 100_000_000 ? 0 : 1)} MB`;
 }
 
 function App() {
   const desktop = isTauri();
-  const [resources, setResources] = useState<ResourceStatus | null>(null);
-  const [view, setView] = useState<"transcribe" | "resources">("resources");
-  const [mediaPath, setMediaPath] = useState("");
-  const [segments, setSegments] = useState<Segment[]>([]);
-  const [resultAligned, setResultAligned] = useState(true);
-  const [lastRun, setLastRun] = useState("");
-  const [selected, setSelected] = useState(0);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [view, setView] = useState<View>("resources");
+  const [resourceTask, setResourceTask] = useState<TaskKind>("transcription");
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [pairs, setPairs] = useState<Record<TaskKind, Pair>>(emptyPairs);
+  const [checks, setChecks] = useState<Partial<Record<TaskKind, PairCheck>>>({});
+  const [busy, setBusy] = useState("");
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [previewFailed, setPreviewFailed] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [alignTimestamps, setAlignTimestamps] = useState(true);
+  const [mirror, setMirror] = useState(false);
+  const [ffmpegPath, setFfmpegPath] = useState("");
+  const [mediaPath, setMediaPath] = useState("");
+  const [imagePath, setImagePath] = useState("");
+  const [segments, setSegments] = useState<Segment[] | null>(null);
+  const [detection, setDetection] = useState<DetectionResult | null>(null);
+  const [textOutput, setTextOutput] = useState<string | null>(null);
   const [language, setLanguage] = useState("");
-  const [targetLanguage, setTargetLanguage] = useState("en");
-  const [translatedLanguage, setTranslatedLanguage] = useState("");
-  const [exportMode, setExportMode] = useState<"source" | "translation">("source");
+  const [alignTimestamps, setAlignTimestamps] = useState(true);
+  const [transcribeOptions, setTranscribeOptions] = useState(true);
+  const [vadEnabled, setVadEnabled] = useState(true);
+  const [generateMode, setGenerateMode] = useState<GenerateMode>("text");
+  const [prompt, setPrompt] = useState("");
+  const [messages, setMessages] = useState<Message[]>([{ role: "user", content: "" }]);
+  const [maxTokens, setMaxTokens] = useState(128);
+  const [temperature, setTemperature] = useState(0.7);
+  const [topP, setTopP] = useState(0.9);
+  const [confidence, setConfidence] = useState(0.25);
+  const [iou, setIou] = useState(0.45);
+  const [maximum, setMaximum] = useState(100);
+  const activeRun = useRef(0);
+
+  async function refreshCatalog() {
+    const next = await invoke<Catalog>("get_catalog");
+    setCatalog(next);
+    setFfmpegPath((current) => current || next.ffmpegPath);
+    setPairs((current) => {
+      const updated = { ...current };
+      for (const { id } of tasks) {
+        const engines = next.engines.filter((item) => item.task === id);
+        const models = next.models.filter((item) => item.descriptor.task === id);
+        updated[id] = {
+          engineId: engines.some((item) => item.id === current[id].engineId) ? current[id].engineId : engines[0]?.id || "",
+          modelId: models.some((item) => item.descriptor.id === current[id].modelId) ? current[id].modelId : models[0]?.descriptor.id || "",
+        };
+      }
+      return updated;
+    });
+    setChecks({});
+    return next;
+  }
 
   useEffect(() => {
     if (!desktop) return;
-    invoke<ResourceStatus>("get_resource_status")
-      .then(setResources)
-      .catch((reason) => setError(String(reason)));
-    const pending = listen<Progress>("task-progress", (event) => {
-      if (event.payload.stage !== "generate") setProgress(event.payload);
+    void refreshCatalog().catch((reason) => setError(String(reason)));
+    const progressListener = listen<Progress>("task-progress", (event) => setProgress(event.payload));
+    const deltaListener = listen<{ runId: number; delta: string }>("text-delta", (event) => {
+      if (event.payload.runId === activeRun.current) setTextOutput((value) => (value || "") + event.payload.delta);
     });
     return () => {
-      void pending.then((unlisten) => unlisten());
+      void progressListener.then((unlisten) => unlisten());
+      void deltaListener.then((unlisten) => unlisten());
     };
   }, [desktop]);
 
-  const mediaUrl = useMemo(
-    () => (mediaPath && desktop ? convertFileSrc(mediaPath) : ""),
-    [mediaPath, desktop],
-  );
-  const isAudio = /\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(mediaPath);
-  useEffect(() => {
-    if (!mediaUrl) return;
-    let cancelled = false;
-    let objectUrl = "";
-    setPreviewUrl("");
-    void (async () => {
-      try {
-        const head = await fetch(mediaUrl, { method: "HEAD" });
-        if (
-          !head.ok ||
-          Number(head.headers.get("content-length")) > 100 * 1024 * 1024
-        ) {
-          throw new Error("preview unavailable");
-        }
-        const response = await fetch(mediaUrl);
-        if (!response.ok) throw new Error("preview unavailable");
-        objectUrl = URL.createObjectURL(await response.blob());
-        if (!cancelled) setPreviewUrl(objectUrl);
-        else URL.revokeObjectURL(objectUrl);
-      } catch {
-        if (!cancelled) setPreviewFailed(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [mediaUrl]);
-  const ready = Boolean(mediaPath && resources?.ready);
-  const selectedEngine = resources?.engines.find((item) => item.id === resources.selectedEngineId);
-  const selectedModel = resources?.models.find((item) => item.id === resources.selectedModelId);
-  const translationModel = resources?.models.find((item) => item.id === resources.selectedTranslationModelId);
-  const translationComplete = Boolean(segments.length && translatedLanguage && segments.every((segment) => segment.translation?.trim()));
-
-  function updateResources(next: ResourceStatus) {
-    if (resources && (resources.selectedEngineId !== next.selectedEngineId || resources.selectedModelId !== next.selectedModelId)) {
-      setSegments([]);
-      setLastRun("");
-      setTranslatedLanguage("");
-      setExportMode("source");
-    }
-    setResources(next);
+  async function act<T>(name: string, action: () => Promise<T>, done?: (result: T) => void) {
+    setBusy(name); setProgress(null); setError(""); setNotice("");
+    try { const result = await action(); done?.(result); return result; }
+    catch (reason) { setError(String(reason)); return undefined; }
+    finally { setBusy(""); }
   }
 
-  async function pickMedia() {
+  function updatePair(kind: TaskKind, patch: Partial<Pair>) {
+    setPairs((current) => ({ ...current, [kind]: { ...current[kind], ...patch } }));
+    setChecks((current) => ({ ...current, [kind]: undefined }));
+  }
+
+  async function validate(kind: TaskKind) {
+    const { engineId, modelId } = pairs[kind];
+    if (!engineId || !modelId) return;
+    await act("validate", async () => {
+      try { await invoke("validate_pair", { engineId, modelId, taskKind: kind }); return { compatible: true, reason: null }; }
+      catch (reason) { return { compatible: false, reason: String(reason) }; }
+    }, (result) => setChecks((current) => ({ ...current, [kind]: result })));
+  }
+
+  async function check(kind: TaskKind) {
+    const { engineId, modelId } = pairs[kind];
+    if (!engineId || !modelId) return;
+    await act("check", () => invoke<{ ready: boolean; reason: string | null }>("check_pair", { engineId, modelId, taskKind: kind }),
+      (result) => setChecks((current) => ({ ...current, [kind]: { ...current[kind], ...result } })));
+  }
+
+  async function resourceAction(command: string, args: Record<string, unknown>, label: string) {
+    await act(label, async () => {
+      const result = await invoke<string | void>(command, args);
+      await refreshCatalog();
+      return result;
+    }, () => setNotice(`${label}完成`));
+  }
+
+  async function register(kind: "engine" | "model" | "aligner") {
     try {
-      const path = await open({
-        multiple: false,
-        filters: [
-          {
-            name: "音视频",
-            extensions: [
-              "mp4",
-              "mov",
-              "mkv",
-              "webm",
-              "mp3",
-              "wav",
-              "m4a",
-              "aac",
-              "flac",
-              "ogg",
-            ],
-          },
-        ],
-      });
-      if (typeof path === "string") {
-        await invoke("allow_media_preview", { path });
-        setMediaPath(path);
-        setPreviewFailed(false);
-        setSegments([]);
-        setLastRun("");
-        setTranslatedLanguage("");
-        setExportMode("source");
-        setError("");
-        setNotice("");
-        setView("transcribe");
-      }
-    } catch (reason) {
-      setError(String(reason));
-    }
+      const model = catalog?.models.find((item) => item.descriptor.id === pairs[resourceTask].modelId);
+      const path = await open({ directory: kind === "model" && model?.descriptor.artifactFormat === "openvino-ir", multiple: false });
+      if (typeof path !== "string") return;
+      if (kind === "aligner") await resourceAction("register_local_aligner", { path }, "登记对齐模型");
+      else if (kind === "engine") await resourceAction("register_local_engine", { engineId: pairs[resourceTask].engineId, path }, "登记引擎");
+      else await resourceAction("register_local_model", { modelId: pairs[resourceTask].modelId, path }, "登记模型");
+    } catch (reason) { setError(String(reason)); }
   }
 
-  async function run() {
-    if (!ready) return;
-    setBusy("transcribe");
-    setProgress(null);
-    setError("");
-    setNotice("");
+  async function pickInput(kind: "media" | "image") {
     try {
-      const result = await invoke<Segment[]>("transcribe_selected", {
-        mediaPath, alignTimestamps, language: language || null,
-      });
-      setSegments(result);
-      setTranslatedLanguage("");
-      setExportMode("source");
-      setResultAligned(alignTimestamps);
-      setLastRun(`${selectedModel?.label || resources?.selectedModelId} / ${selectedEngine?.label || resources?.selectedEngineId} / ${alignTimestamps ? "时间轴" : "全文"} / ${languages.find(([code]) => code === language)?.[1] || "自动"}`);
-      setSelected(0);
-      setNotice(alignTimestamps ? `转写完成，共 ${result.length} 条字幕` : "转写完成，已合并为全文");
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function cancel() {
-    await invoke("cancel_transcription");
-  }
-
-  async function translate() {
-    if (!segments.length || !resources?.translationReady || !resources.selectedTranslationModelId) return;
-    setBusy("translate");
-    setProgress(null);
-    setError("");
-    setNotice("");
-    try {
-      const result = await invoke<Segment[]>("translate_subtitles", {
-        segments: segments.map(({ start, end, text }) => ({ start, end, text })),
-        modelId: resources.selectedTranslationModelId,
-        targetLanguage,
-      });
-      if (result.length !== segments.length) throw new Error("翻译结果与字幕数量不一致。");
-      setSegments((current) => current.map((segment, index) => ({ ...segment, translation: result[index].text })));
-      setTranslatedLanguage(targetLanguage);
-      setExportMode("translation");
-      setNotice(`已翻译 ${result.length} 条字幕`);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function exportFile() {
-    if (!segments.length) return;
-    if (exportMode === "translation" && !translationComplete) return;
-    const initial = mediaPath.replace(/\.[^.\\/]+$/, "") + (exportMode === "translation" ? `.${translatedLanguage}.srt` : ".srt");
-    const path = await save({
-      defaultPath: initial,
-      filters: [{ name: "SubRip 字幕", extensions: ["srt"] }],
-    });
-    if (!path) return;
-    try {
-      await invoke("export_srt", { path, segments: segments.map(({ start, end, text, translation }) => ({ start, end, text: exportMode === "translation" ? translation : text })) });
-      setNotice(`已导出 ${fileName(path)}`);
+      const path = await open({ multiple: false, filters: kind === "image"
+        ? [{ name: "图片", extensions: ["jpg", "jpeg", "png", "webp", "bmp"] }]
+        : [{ name: "音视频", extensions: ["mp4", "mov", "mkv", "webm", "mp3", "wav", "m4a", "aac", "flac", "ogg"] }] });
+      if (typeof path !== "string") return;
+      await invoke("allow_preview", { path });
+      if (kind === "image") { setImagePath(path); setDetection(null); }
+      else { setMediaPath(path); setSegments(null); }
       setError("");
-    } catch (reason) {
-      setError(String(reason));
-    }
+    } catch (reason) { setError(String(reason)); }
   }
 
-  function updateSegment(index: number, patch: Partial<Segment>) {
-    setSegments((current) =>
-      current.map((item, i) => (i === index ? { ...item, ...patch, translation: patch.text !== undefined && patch.text !== item.text ? undefined : item.translation } : item)),
-    );
+  async function runTranscription() {
+    const pair = pairs.transcription;
+    setSegments(null);
+    await act("transcribe", () => invoke<Segment[]>("test_transcribe", {
+      engineId: pair.engineId, modelId: pair.modelId, mediaPath, ffmpegPath: ffmpegPath || "ffmpeg",
+      vadEnabled, withOptions: transcribeOptions, alignTimestamps, language: language || null,
+    }), setSegments);
   }
 
-  function addSegment() {
-    const last = segments.at(-1);
-    setSegments((current) => [
-      ...current,
-      { start: last?.end || 0, end: (last?.end || 0) + 2, text: "" },
-    ]);
-    setSelected(segments.length);
+  async function runGeneration() {
+    const pair = pairs["text-generation"];
+    const runId = ++activeRun.current;
+    setTextOutput(null);
+    await act("generate", () => invoke<string>("test_generate", { input: {
+      engineId: pair.engineId, modelId: pair.modelId, mode: generateMode, prompt, messages,
+      maxTokens, temperature, topP, runId,
+    } }), setTextOutput);
   }
 
-  return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark">
-            <AudioLines size={19} strokeWidth={2.3} />
-          </span>
-          <div>
-            <strong>字幕工作台</strong>
-            <span>本地推理调试</span>
-          </div>
-        </div>
-        <div className="top-actions">
-          <span className="platform-chip">
-            {resources?.system.platform === "windows"
-              ? "Windows"
-              : resources?.system.platform || "桌面应用"}
-          </span>
-          <button
-            className="button button-quiet"
-            onClick={pickMedia}
-            disabled={!desktop || Boolean(busy)}
-          >
-            <FolderOpen size={17} />
-            导入音视频
-          </button>
-          <select className="export-mode" aria-label="导出内容" value={exportMode} disabled={Boolean(busy)} onChange={(event) => setExportMode(event.target.value as "source" | "translation")}>
-            <option value="source">原文 SRT</option>
-            <option value="translation" disabled={!translationComplete}>译文 SRT</option>
-          </select>
-          <button
-            className="button button-primary"
-            onClick={exportFile}
-            disabled={!segments.length || Boolean(busy) || (exportMode === "translation" && !translationComplete)}
-          >
-            <FileDown size={17} />
-            导出
-          </button>
-        </div>
+  async function runDetection() {
+    const pair = pairs["object-detection"];
+    setDetection(null);
+    await act("detect", () => invoke<DetectionResult>("test_detect", {
+      engineId: pair.engineId, modelId: pair.modelId, imagePath,
+      confidenceThreshold: confidence, iouThreshold: iou, maxDetections: maximum,
+    }), setDetection);
+  }
+
+  function pairFields(kind: TaskKind) {
+    const engines = catalog?.engines.filter((item) => item.task === kind) || [];
+    const models = catalog?.models.filter((item) => item.descriptor.task === kind) || [];
+    const pair = pairs[kind];
+    const engine = engines.find((item) => item.id === pair.engineId);
+    const model = models.find((item) => item.descriptor.id === pair.modelId);
+    const pairCheck = checks[kind];
+    return <div className="pair-section">
+      <div className="section-title"><h2>运行资源</h2><span>{kind}</span></div>
+      <div className="field-grid">
+        <label className="field"><span>引擎</span><select value={pair.engineId} disabled={!!busy} onChange={(event) => updatePair(kind, { engineId: event.target.value })}>
+          {engines.map((item) => <option key={item.id} value={item.id}>{item.label} ({item.id})</option>)}
+        </select></label>
+        <label className="field"><span>模型</span><select value={pair.modelId} disabled={!!busy} onChange={(event) => updatePair(kind, { modelId: event.target.value })}>
+          {models.map((item) => <option key={item.descriptor.id} value={item.descriptor.id}>{item.descriptor.label}</option>)}
+        </select></label>
+      </div>
+      <div className="pair-meta"><span className={engine?.path ? "ok" : ""}>{engine?.path ? "引擎已安装" : "引擎未安装"}</span><span className={model?.path ? "ok" : ""}>{model?.path ? "模型已登记" : "模型未登记"}</span></div>
+      <div className="pair-check"><button className="button" disabled={!desktop || !!busy || !pair.engineId || !pair.modelId} onClick={() => void validate(kind)}><Check size={15} />validate_pair_for</button>
+        <button className="button" disabled={!desktop || !!busy || !pair.engineId || !pair.modelId} onClick={() => void check(kind)}><Check size={15} />check</button>
+        {pairCheck && <span className={`check-state ${pairCheck.ready || pairCheck.compatible ? "ok" : "warn"}`}>{pairCheck.compatible === undefined ? "" : pairCheck.compatible ? "静态兼容" : "不兼容"}{pairCheck.ready === undefined ? "" : pairCheck.ready ? " · 运行就绪" : " · 未就绪"}{pairCheck.reason ? ` · ${pairCheck.reason}` : ""}</span>}</div>
+    </div>;
+  }
+
+  const selectedEngine = catalog?.engines.find((item) => item.id === pairs[resourceTask].engineId);
+  const selectedModel = catalog?.models.find((item) => item.descriptor.id === pairs[resourceTask].modelId);
+  const imageUrl = imagePath && desktop ? convertFileSrc(imagePath) : "";
+  const mediaUrl = mediaPath && desktop ? convertFileSrc(mediaPath) : "";
+  const isAudio = /\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(mediaPath);
+
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <div className="brand"><span className="brand-icon"><Box size={20} /></span><div><strong>Model SDK</strong><small>调试台</small></div></div>
+      <nav aria-label="SDK 接口">
+        <button className={view === "resources" ? "nav-item active" : "nav-item"} onClick={() => { setView("resources"); setError(""); }}><Cpu size={18} />资源与兼容性</button>
+        {tasks.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? "nav-item active" : "nav-item"} onClick={() => { setView(id); setError(""); }}><Icon size={18} />{label}</button>)}
+      </nav>
+      <div className="sidebar-footer"><span>资源目录</span><code title={catalog?.storageDir}>{catalog?.storageDir || "未连接"}</code></div>
+    </aside>
+
+    <div className="workspace">
+      <header className="topbar"><div><h1>{view === "resources" ? "资源与兼容性" : tasks.find((item) => item.id === view)?.label}</h1><span>{view === "resources" ? "engines / models / validate_pair_for / check" : tasks.find((item) => item.id === view)?.method}</span></div>
+        <button className="icon-button" aria-label="刷新资源目录" title="刷新资源目录" disabled={!!busy || !desktop} onClick={() => void act("refresh", refreshCatalog)}><RefreshCw size={18} /></button>
       </header>
+      {!desktop && <div className="banner warning"><CircleAlert size={17} />请在 Tauri 桌面应用中运行，浏览器页面无法调用本地 SDK。</div>}
+      {error && <div className="banner error" role="alert"><CircleAlert size={17} /><span>{error}</span><button className="icon-button" aria-label="关闭错误" onClick={() => setError("")}><X size={16} /></button></div>}
+      {notice && <div className="banner success" role="status"><Check size={17} />{notice}</div>}
+      <div className="content-grid"><main className="controls">
+        {view === "resources" && <>
+          <div className="task-tabs" role="tablist" aria-label="任务类型">{tasks.map(({ id, label }) => <button key={id} role="tab" aria-selected={resourceTask === id} className={resourceTask === id ? "active" : ""} onClick={() => setResourceTask(id)}>{label}</button>)}</div>
+          {pairFields(resourceTask)}
+          <section className="work-section"><div className="section-title"><h2>引擎</h2><code>{selectedEngine?.id}</code></div>
+            <div className="resource-line"><strong>{selectedEngine?.label}</strong><span>{selectedEngine?.path || selectedEngine?.reason || `未安装 · ${selectedEngine?.version || ""}`}</span></div>
+            <div className="button-row"><button className="button" disabled={!!busy || !selectedEngine} onClick={() => void register("engine")}><FolderOpen size={16} />登记本机运行时</button>
+              <button className="button primary" disabled={!!busy || !selectedEngine?.suitable} onClick={() => void resourceAction("download_engine", { engineId: selectedEngine?.id }, "安装引擎")}><Download size={16} />安装指定版本</button></div>
+          </section>
+          <section className="work-section"><div className="section-title"><h2>模型权重</h2><code>{selectedModel?.descriptor.id}</code></div>
+            <div className="resource-line"><strong>{selectedModel?.descriptor.label}</strong><span>{selectedModel?.path || `${selectedModel?.descriptor.artifactFormat || ""} · ${size(selectedModel?.sizeBytes ?? null)}`}</span></div>
+            <div className="button-row"><button className="button" disabled={!!busy || !selectedModel} onClick={() => void register("model")}><FolderOpen size={16} />登记本地权重</button>
+              <button className="button primary" disabled={!!busy || !selectedModel?.downloadable} onClick={() => void resourceAction("download_model", { modelId: selectedModel?.descriptor.id, mirror }, "下载模型")}><Download size={16} />下载并校验</button>
+              <label className="check-label"><input type="checkbox" checked={mirror} disabled={!!busy} onChange={(event) => setMirror(event.target.checked)} />镜像源</label></div>
+          </section>
+          <section className="work-section"><div className="section-title"><h2>转写依赖</h2></div>
+            <div className="field"><span>FFmpeg 路径</span><div className="input-action"><input value={ffmpegPath} onChange={(event) => setFfmpegPath(event.target.value)} placeholder="ffmpeg" disabled={!!busy} /><button className="icon-button" title="选择 FFmpeg" aria-label="选择 FFmpeg" disabled={!desktop || !!busy} onClick={() => void open({ multiple: false }).then((path) => { if (typeof path === "string") setFfmpegPath(path); })}><FolderOpen size={17} /></button></div></div>
+            <div className="button-row"><button className="button" disabled={!desktop || !!busy} onClick={() => void act("install-ffmpeg", () => invoke<string>("install_ffmpeg"), (path) => { setFfmpegPath(path); setNotice("FFmpeg 已安装"); })}><Download size={16} />安装 FFmpeg</button>
+              <button className="button" disabled={!desktop || !!busy} onClick={() => void register("aligner")}><FolderOpen size={16} />登记对齐模型</button>
+              <button className="button" disabled={!desktop || !!busy} onClick={() => void resourceAction("download_aligner", {}, "下载对齐模型")}><Download size={16} />下载对齐模型</button></div>
+          </section>
+        </>}
 
-      <main className="workspace">
-        <section className={`left-pane ${view === "resources" ? "resource-view" : "transcribe-view"}`}>
-          <div className="work-tabs" role="tablist" aria-label="工作视图">
-            <button role="tab" aria-selected={view === "resources"} className={view === "resources" ? "active" : ""}
-              onClick={() => setView("resources")}><SlidersHorizontal size={16} />资源与设备</button>
-            <button role="tab" aria-selected={view === "transcribe"} className={view === "transcribe" ? "active" : ""}
-              onClick={() => setView("transcribe")}><AudioLines size={16} />转写测试</button>
-          </div>
-          {view === "resources" ? (
-            <ResourcePanel status={resources} error={error} busy={busy} progress={progress}
-              onStatus={updateResources} onBusy={setBusy} onProgress={setProgress} onError={setError} onNotice={setNotice} />
-          ) : (
-            <>
-              <div className="pane-heading">
-                <div><h1>素材与转写</h1></div>
-                <span className="subtle">{mediaPath ? fileName(mediaPath) : "未导入素材"}</span>
-              </div>
-              <div className={`media-stage ${mediaPath ? "has-media" : ""}`}>
-                {mediaPath ? (
-                  isAudio ? (
-                    <div className="audio-stage">
-                      <FileAudio size={62} strokeWidth={1.3} />
-                      <strong>{fileName(mediaPath)}</strong>
-                      {previewFailed ? <span>此音频无法在窗口中预览，仍可继续转写</span>
-                        : !previewUrl ? <span>正在准备音频预览</span>
-                        : <audio controls src={previewUrl} onError={() => setPreviewFailed(true)} />}
-                    </div>
-                  ) : previewFailed ? (
-                    <div className="preview-fallback"><FileVideo size={38} /><strong>{fileName(mediaPath)}</strong><span>当前素材无法在窗口中预览，仍可继续转写</span></div>
-                  ) : !previewUrl ? (
-                    <div className="preview-fallback"><FileVideo size={38} /><span>正在准备视频预览</span></div>
-                  ) : <video controls src={previewUrl} onError={() => setPreviewFailed(true)} />
-                ) : (
-                  <button className="empty-media" onClick={pickMedia} disabled={!desktop}>
-                    <span className="empty-icon"><FileVideo size={31} strokeWidth={1.5} /></span>
-                    <strong>导入音视频</strong><small>MP4、MOV、MKV、MP3、WAV 等格式</small>
-                  </button>
-                )}
-              </div>
-              <div className="active-resources">
-                <div className="section-heading"><h2>当前资源</h2><button className="text-action" onClick={() => setView("resources")}>配置资源</button></div>
-                <div className="active-resource-line"><span>推理引擎</span><strong>{selectedEngine?.label || "未选择"}</strong><small>{selectedEngine?.installedPath ? "已安装" : "未安装"}</small></div>
-                <div className="active-resource-line"><span>转写模型</span><strong>{selectedModel?.label || "未选择"}</strong><small>{selectedModel?.installedPath ? "已安装" : "未安装"}</small></div>
-                <div className="active-resource-line"><span>翻译模型</span><strong>{translationModel?.label || "未登记"}</strong><small>{resources?.translationReady ? "可用" : "未就绪"}</small></div>
-                <div className="active-resource-line"><span>FFmpeg</span><strong>{resources?.system.ffmpegAvailable ? "可用" : "缺失"}</strong></div>
-              </div>
-              <div className="transcription-options">
-                <label className="transcription-toggle">
-                  <input type="checkbox" checked={alignTimestamps} disabled={Boolean(busy)}
-                    onChange={(event) => setAlignTimestamps(event.target.checked)} />
-                  时间轴对齐
-                </label>
-                <label className="transcription-language">
-                  <span>识别语言</span>
-                  <select value={language} disabled={Boolean(busy)} onChange={(event) => setLanguage(event.target.value)}>
-                    <option value="">自动识别</option>
-                    {languages.map(([code, name]) => <option value={code} key={code}>{name}</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="task-footer">
-                <div className="task-status">
-                  {busy ? <><LoaderCircle size={17} className="spin" /><span>{progress?.message || "正在准备任务"}</span>{progress && <b>{progress.percent}%</b>}</>
-                    : <><span className={`status-dot ${ready ? "ready" : ""}`} />{ready ? "可以开始转写" : "请准备素材与本地资源"}</>}
-                </div>
-                {busy === "transcribe" ? (
-                  <button className="button button-stop" onClick={cancel}><Square size={15} />取消</button>
-                ) : (
-                  <button className="button button-primary run-button" onClick={run} disabled={!ready || Boolean(busy)}>
-                    <Play size={17} fill="currentColor" />开始转写
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </section>
+        {view !== "resources" && pairFields(view)}
+        {view === "transcription" && <section className="work-section"><div className="section-title"><h2>输入文件</h2></div>
+          <div className="segmented" role="tablist" aria-label="转写接口"><button role="tab" aria-selected={!transcribeOptions} className={!transcribeOptions ? "active" : ""} onClick={() => setTranscribeOptions(false)}>transcribe</button><button role="tab" aria-selected={transcribeOptions} className={transcribeOptions ? "active" : ""} onClick={() => setTranscribeOptions(true)}>transcribe_with_options</button></div>
+          <button className="file-picker" disabled={!!busy || !desktop} onClick={() => void pickInput("media")}><FolderOpen size={19} /><span>{mediaPath ? fileName(mediaPath) : "选择音频或视频"}</span><small>{mediaPath || "MP3、WAV、MP4 等"}</small></button>
+          <div className="field-grid options"><label className="field"><span>识别语言</span><select value={language} disabled={!!busy || !transcribeOptions} onChange={(event) => setLanguage(event.target.value)}>{languages.map(([code, name]) => <option key={code} value={code}>{name}</option>)}</select></label>
+            <label className="field"><span>FFmpeg</span><input value={ffmpegPath} disabled={!!busy} onChange={(event) => setFfmpegPath(event.target.value)} /></label></div>
+          <div className="button-row"><label className="check-label"><input type="checkbox" checked={alignTimestamps} disabled={!!busy || !transcribeOptions} onChange={(event) => setAlignTimestamps(event.target.checked)} />时间轴对齐</label>
+            <label className="check-label"><input type="checkbox" checked={vadEnabled} disabled={!!busy} onChange={(event) => setVadEnabled(event.target.checked)} />VAD 分段</label></div>
+          <button className="button primary run-button" disabled={!!busy || !mediaPath || !pairs.transcription.engineId || !pairs.transcription.modelId} onClick={() => void runTranscription()}><Play size={16} />调用转写接口</button>
+        </section>}
 
-        <section className="right-pane">
-          <div className="pane-heading transcript-heading">
-            <div>
-              <h2>{segments.length && !resultAligned ? "转录全文" : "字幕"}</h2>
-              {resultAligned && <span className="count">{segments.length}</span>}
-            </div>
-            <div className="subtitle-heading-actions">
-              <label className="translation-target">
-                翻译为
-                <select value={targetLanguage} disabled={Boolean(busy)} onChange={(event) => setTargetLanguage(event.target.value)}>
-                  {languages.map(([code, name]) => <option value={code} key={code}>{name}</option>)}
-                </select>
-              </label>
-              {busy === "translate" ? (
-                <button className="button button-stop" onClick={cancel}><Square size={15} />取消</button>
-              ) : (
-                <button className="button" onClick={translate} disabled={!segments.length || !resources?.translationReady || Boolean(busy)} title={!resources?.translationReady ? resources?.translationReason || "请先配置翻译资源" : undefined}>
-                  <Languages size={16} />翻译
-                </button>
-              )}
-              <button
-                className="icon-button"
-                title="添加字幕行"
-                aria-label="添加字幕行"
-                onClick={addSegment}
-                disabled={!segments.length || !resultAligned || Boolean(busy)}
-              >
-                <Plus size={18} />
-              </button>
-            </div>
-          </div>
-          <div className="transcript-body">
-            {segments.length ? (
-              segments.map((segment, index) => (
-                <div
-                  className={`subtitle-row ${selected === index ? "selected" : ""} ${resultAligned ? "" : "full-text"}`}
-                  key={index}
-                  onClick={() => setSelected(index)}
-                >
-                  {resultAligned && <div className="row-index">{String(index + 1).padStart(2, "0")}</div>}
-                  <div className="row-main">
-                    {resultAligned && <div className="time-line">
-                      <input
-                        aria-label={`第 ${index + 1} 行开始时间`}
-                        disabled={Boolean(busy)}
-                        defaultValue={displayTime(segment.start)}
-                        key={`start-${index}-${segment.start}`}
-                        onBlur={(event) => {
-                          const value = parseTime(event.target.value);
-                          if (value !== null)
-                            updateSegment(index, { start: value });
-                          else event.target.value = displayTime(segment.start);
-                        }}
-                      />
-                      <span>至</span>
-                      <input
-                        aria-label={`第 ${index + 1} 行结束时间`}
-                        disabled={Boolean(busy)}
-                        defaultValue={displayTime(segment.end)}
-                        key={`end-${index}-${segment.end}`}
-                        onBlur={(event) => {
-                          const value = parseTime(event.target.value);
-                          if (value !== null)
-                            updateSegment(index, { end: value });
-                          else event.target.value = displayTime(segment.end);
-                        }}
-                      />
-                    </div>}
-                    <textarea
-                      aria-label={resultAligned ? `第 ${index + 1} 行字幕` : "转录全文"}
-                      disabled={Boolean(busy)}
-                      value={segment.text}
-                      onChange={(event) =>
-                        updateSegment(index, { text: event.target.value })
-                      }
-                      rows={resultAligned ? 2 : 18}
-                    />
-                    {translatedLanguage && <div className="translation-line">
-                      <span>译文 · {languages.find(([code]) => code === translatedLanguage)?.[1]}</span>
-                      <textarea
-                        aria-label={`第 ${index + 1} 行译文`}
-                        value={segment.translation || ""}
-                        disabled={Boolean(busy)}
-                        onChange={(event) => setSegments((current) => current.map((item, i) => i === index ? { ...item, translation: event.target.value } : item))}
-                        rows={resultAligned ? 2 : 8}
-                      />
-                    </div>}
-                  </div>
-                  {resultAligned && <button
-                    className="icon-button delete-button"
-                    title="删除字幕行"
-                    aria-label={`删除第 ${index + 1} 行`}
-                    disabled={Boolean(busy)}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setSegments((current) =>
-                        current.filter((_, i) => i !== index),
-                      );
-                    }}
-                  >
-                    <Trash2 size={16} />
-                  </button>}
-                </div>
-              ))
-            ) : (
-              <div className="empty-transcript">
-                <Scissors size={35} strokeWidth={1.3} />
-                <strong>字幕会显示在这里</strong>
-                <span>完成转写后，可逐条修改时间和文字</span>
-              </div>
-            )}
-          </div>
-          <div className="transcript-footer">
-            <span>
-              {busy === "translate" ? `${progress?.message || "正在准备翻译"}${progress ? ` · ${progress.percent}%` : ""}`
-                : segments.length ? lastRun : "支持逐条校对与导出"}
-            </span>
-            <span>
-              {segments.length
-                ? `${displayTime(segments.at(-1)?.end || 0)} 结束`
-                : "SRT"}
-            </span>
-          </div>
-        </section>
+        {view === "text-generation" && <section className="work-section"><div className="section-title"><h2>请求内容</h2></div>
+          <div className="segmented" role="tablist" aria-label="生成接口">{(["text", "chat", "stream"] as GenerateMode[]).map((mode) => <button key={mode} className={generateMode === mode ? "active" : ""} role="tab" aria-selected={generateMode === mode} onClick={() => setGenerateMode(mode)}>{mode === "text" ? "generate_text" : mode === "chat" ? "generate_chat" : "generate_chat_stream"}</button>)}</div>
+          {generateMode === "text" ? <label className="field"><span>Prompt</span><textarea rows={8} value={prompt} disabled={!!busy} onChange={(event) => setPrompt(event.target.value)} placeholder="输入测试提示词" /></label>
+            : <div className="messages">{messages.map((message, index) => <div className="message-row" key={index}><select value={message.role} disabled={!!busy} aria-label={`消息 ${index + 1} 角色`} onChange={(event) => setMessages((current) => current.map((item, at) => at === index ? { ...item, role: event.target.value as Message["role"] } : item))}><option value="system">system</option><option value="user">user</option><option value="assistant">assistant</option></select><textarea rows={3} value={message.content} disabled={!!busy} aria-label={`消息 ${index + 1} 内容`} onChange={(event) => setMessages((current) => current.map((item, at) => at === index ? { ...item, content: event.target.value } : item))} /><button className="icon-button" title="删除消息" aria-label="删除消息" disabled={!!busy || messages.length === 1} onClick={() => setMessages((current) => current.filter((_, at) => at !== index))}><Trash2 size={17} /></button></div>)}<button className="button" disabled={!!busy} onClick={() => setMessages((current) => [...current, { role: "user", content: "" }])}><Plus size={16} />添加消息</button></div>}
+          <div className="field-grid options"><label className="field"><span>最大 token</span><input type="number" min={1} max={1024} value={maxTokens} disabled={!!busy} onChange={(event) => setMaxTokens(Number(event.target.value))} /></label>
+            {generateMode !== "text" && <><label className="field"><span>Temperature</span><input type="number" step="0.1" min={0} value={temperature} disabled={!!busy} onChange={(event) => setTemperature(Number(event.target.value))} /></label><label className="field"><span>Top P</span><input type="number" step="0.05" min={0.01} max={1} value={topP} disabled={!!busy} onChange={(event) => setTopP(Number(event.target.value))} /></label></>}</div>
+          <div className="button-row"><button className="button primary run-button" disabled={!!busy || !pairs["text-generation"].engineId || !pairs["text-generation"].modelId || (generateMode === "text" ? !prompt.trim() : messages.some((item) => !item.content.trim()))} onClick={() => void runGeneration()}><Play size={16} />调用生成接口</button>
+            <button className="button" disabled={!desktop || !!busy} onClick={() => void act("stop", () => invoke<void>("stop_generation"), () => setNotice("生成服务已停止"))}><Square size={15} />停止服务</button></div>
+        </section>}
+
+        {view === "object-detection" && <section className="work-section"><div className="section-title"><h2>输入图片</h2></div>
+          <button className="file-picker" disabled={!!busy || !desktop} onClick={() => void pickInput("image")}><FolderOpen size={19} /><span>{imagePath ? fileName(imagePath) : "选择图片"}</span><small>{imagePath || "JPG、PNG、WebP、BMP"}</small></button>
+          <div className="field-grid options"><label className="field"><span>置信度阈值</span><input type="number" min={0} max={1} step={0.05} value={confidence} disabled={!!busy} onChange={(event) => setConfidence(Number(event.target.value))} /></label>
+            <label className="field"><span>NMS IoU</span><input type="number" min={0} max={1} step={0.05} value={iou} disabled={!!busy} onChange={(event) => setIou(Number(event.target.value))} /></label>
+            <label className="field"><span>最多目标</span><input type="number" min={1} max={1000} value={maximum} disabled={!!busy} onChange={(event) => setMaximum(Number(event.target.value))} /></label></div>
+          <button className="button primary run-button" disabled={!!busy || !imagePath || !pairs["object-detection"].engineId || !pairs["object-detection"].modelId} onClick={() => void runDetection()}><Play size={16} />调用检测接口</button>
+        </section>}
       </main>
-      {!desktop && (
-        <div className="browser-note">
-          此页面需要在 Tauri 桌面窗口中运行，浏览器仅用于界面预览。
-        </div>
-      )}
-      {(error || notice) && (
-        <div className={`toast ${error ? "toast-error" : ""}`} role="status">
-          <span>{error || notice}</span>
-          <button
-            aria-label="关闭提示"
-            onClick={() => {
-              setError("");
-              setNotice("");
-            }}
-          >
-            ×
-          </button>
-        </div>
-      )}
+
+      <aside className="results"><div className="result-heading"><div><h2>{view === "resources" ? "目录概览" : "调用结果"}</h2><span>{view === "resources" ? "SDK catalog" : tasks.find((item) => item.id === view)?.method}</span></div>{busy && <LoaderCircle size={18} className="spin" />}</div>
+        {view === "resources" && <div className="inventory"><div className="summary-row"><div><strong>{catalog?.engines.filter((item) => item.task === resourceTask).length || 0}</strong><span>引擎版本</span></div><div><strong>{catalog?.models.filter((item) => item.descriptor.task === resourceTask).length || 0}</strong><span>内置模型</span></div></div><h3>引擎</h3>{catalog?.engines.filter((item) => item.task === resourceTask).map((item) => <div className="inventory-row" key={item.id}><div><strong>{item.label}</strong><code>{item.id}</code></div><span className={item.path ? "state ok" : "state"}>{item.path ? "已安装" : item.suitable ? "未安装" : "不可用"}</span></div>)}<h3>模型</h3>{catalog?.models.filter((item) => item.descriptor.task === resourceTask).map((item) => <div className="inventory-row" key={item.descriptor.id}><div><strong>{item.descriptor.label}</strong><code>{item.descriptor.id}</code></div><span className={item.path ? "state ok" : "state"}>{item.path ? "已登记" : "未登记"}</span></div>)}</div>}
+        {view === "transcription" && <div className="result-body">{mediaUrl && (isAudio ? <audio controls src={mediaUrl} className="media-preview" /> : <video controls src={mediaUrl} className="media-preview" />)}{segments ? <><div className="result-count">{segments.length} 条结果</div><div className="segments">{segments.map((item, index) => <div className="segment" key={index}><time>{time(item.start)} – {time(item.end)}</time><p>{item.text}</p></div>)}</div><details><summary>原始返回值</summary><pre>{JSON.stringify(segments, null, 2)}</pre></details></> : <div className="empty-result"><AudioLines size={30} /><span>选择文件并调用转写接口</span></div>}</div>}
+        {view === "text-generation" && <div className="result-body">{textOutput !== null ? <><pre className="generated-text">{textOutput || (busy ? "正在等待首段输出…" : "模型返回空文本")}</pre><details><summary>原始返回值</summary><pre>{JSON.stringify(textOutput)}</pre></details></> : <div className="empty-result"><MessageSquareText size={30} /><span>输入内容并调用生成接口</span></div>}</div>}
+        {view === "object-detection" && <div className="result-body">{imageUrl && <div className="detection-image"><img src={imageUrl} alt={fileName(imagePath)} />{detection?.detections.map((item, index) => <div key={index} className="detection-box" style={{ left: `${item.x1 / detection.imageWidth * 100}%`, top: `${item.y1 / detection.imageHeight * 100}%`, width: `${(item.x2 - item.x1) / detection.imageWidth * 100}%`, height: `${(item.y2 - item.y1) / detection.imageHeight * 100}%` }}><span>{item.label} {(item.confidence * 100).toFixed(0)}%</span></div>)}</div>}{detection ? <><div className="result-count">{detection.detections.length} 个目标 · {detection.imageWidth} × {detection.imageHeight}</div><div className="detections">{detection.detections.map((item, index) => <div className="detection-row" key={index}><strong>{item.label}</strong><span>{(item.confidence * 100).toFixed(1)}%</span><code>{Math.round(item.x1)}, {Math.round(item.y1)} → {Math.round(item.x2)}, {Math.round(item.y2)}</code></div>)}</div><details><summary>原始返回值</summary><pre>{JSON.stringify(detection, null, 2)}</pre></details></> : <div className="empty-result"><FileImage size={30} /><span>选择图片并调用检测接口</span></div>}</div>}
+      </aside></div>
+      {busy && <footer className="taskbar"><div><LoaderCircle size={16} className="spin" /><span>{progress?.message || "正在执行 SDK 调用"}</span><strong>{progress ? `${progress.percent}%` : ""}</strong></div>{["安装引擎", "下载模型", "install-ffmpeg", "下载对齐模型", "transcribe", "generate", "detect"].includes(busy) && <button className="button danger" onClick={() => void invoke("cancel_task").catch((reason) => setError(String(reason)))}><Square size={14} />取消</button>}</footer>}
     </div>
-  );
+  </div>;
 }
 
-createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);

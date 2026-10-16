@@ -208,6 +208,9 @@ impl ModelSdk {
                         (spec.label, resources::ENGINE_VERSION, spec.size_mb)
                     }
                     Family::OpenVino => ("OpenVINO CPU", "2026.4.1", 0),
+                    Family::OnnxRuntime => {
+                        ("ONNX Runtime CPU", resources::ONNXRUNTIME_ENGINE_VERSION, 0)
+                    }
                     Family::Llama => {
                         let variant = resources::llama_variant(adapter.id)?;
                         let mb = (variant.assets.iter().map(|asset| asset.size).sum::<u64>()
@@ -222,6 +225,7 @@ impl ModelSdk {
                         Family::CrispAsr => "crispasr",
                         Family::OpenVino => "openvino",
                         Family::Llama => "llama",
+                        Family::OnnxRuntime => "onnxruntime",
                     }
                     .into(),
                     variant: adapter.variant.into(),
@@ -251,8 +255,14 @@ impl ModelSdk {
         let managed = adapter.managed_path(&self.root);
         Ok(override_path.or_else(|| {
             (managed.is_file()
-                && (adapter.family != Family::OpenVino
-                    || self.root.join("engines/openvino/ready.txt").is_file()))
+                && match adapter.family {
+                    Family::OpenVino => self.root.join("engines/openvino/ready.txt").is_file(),
+                    Family::OnnxRuntime => self
+                        .root
+                        .join("engines/onnxruntime-cpu/ready.txt")
+                        .is_file(),
+                    _ => true,
+                })
             .then_some(managed)
         }))
     }
@@ -391,11 +401,15 @@ mod tests {
     #[test]
     fn catalog_compatibility_is_profile_format_and_task_specific() {
         let sdk = temp_sdk("compatibility");
-        assert_eq!(engines::ADAPTERS.len(), 10);
+        assert_eq!(engines::ADAPTERS.len(), 11);
         assert_eq!(sdk.models().unwrap().len(), resources::MODELS.len() + 1);
         for model in sdk.models().unwrap() {
             for engine in engines::ADAPTERS {
-                for task in [TaskKind::Transcription, TaskKind::TextGeneration] {
+                for task in [
+                    TaskKind::Transcription,
+                    TaskKind::TextGeneration,
+                    TaskKind::ObjectDetection,
+                ] {
                     let expected = match engine.family {
                         Family::CrispAsr => {
                             task == TaskKind::Transcription
@@ -421,6 +435,16 @@ mod tests {
                             task == TaskKind::TextGeneration
                                 && model.descriptor.id == resources::HY_MT_MODEL_ID
                         }
+                        Family::OnnxRuntime => {
+                            task == TaskKind::ObjectDetection
+                                && [
+                                    "yolov8n-det-fp32",
+                                    "yolov8s-det-fp32",
+                                    "yolo11n-det-fp32",
+                                    "yolo11s-det-fp32",
+                                ]
+                                .contains(&model.descriptor.id.as_str())
+                        }
                     };
                     assert_eq!(
                         sdk.validate_pair_for(engine.id, &model.descriptor.id, task)
@@ -441,6 +465,9 @@ mod tests {
             .is_err());
         assert!(sdk
             .validate_pair_for("crispasr-cpu", "missing", TaskKind::Transcription)
+            .is_err());
+        assert!(sdk
+            .validate_pair_for("onnxruntime-cpu", "missing", TaskKind::ObjectDetection)
             .is_err());
         let _ = fs::remove_dir_all(sdk.root());
     }
@@ -467,6 +494,17 @@ mod tests {
             ModelProfile::HyMt15,
             ArtifactFormat::Gguf,
             TaskKind::Transcription
+        ));
+        let yolo = ModelSdk::descriptor("yolo11n-det-fp32").unwrap();
+        assert!(engines::get("onnxruntime-cpu").unwrap().supports(
+            yolo.profile,
+            yolo.artifact_format,
+            yolo.task
+        ));
+        assert!(!engines::get("onnxruntime-cpu").unwrap().supports(
+            yolo.profile,
+            yolo.artifact_format,
+            TaskKind::TextGeneration
         ));
     }
 
@@ -521,7 +559,7 @@ mod tests {
             b"{ invalid application data",
         )
         .unwrap();
-        assert_eq!(sdk.models().unwrap().len(), 12);
+        assert_eq!(sdk.models().unwrap().len(), 16);
         fs::write(
             sdk.root().join("sdk-resources.json"),
             br#"{"enginePaths":{},"modelPaths":{}}"#,
@@ -535,7 +573,7 @@ mod tests {
         .unwrap();
         assert!(sdk.models().unwrap_err().contains("版本不兼容"));
         sdk.save_registry(&Registry::default()).unwrap();
-        assert_eq!(sdk.models().unwrap().len(), 12);
+        assert_eq!(sdk.models().unwrap().len(), 16);
         let _ = fs::remove_dir_all(sdk.root());
     }
 

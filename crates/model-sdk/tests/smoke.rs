@@ -1,9 +1,69 @@
 use std::path::Path;
 
 use model_sdk::{
-    task::TaskControl, ChatMessage, ChatRole, GenerationOptions, ModelSdk, TranscriptionOptions,
+    task::TaskControl, ChatMessage, ChatRole, DetectionOptions, GenerationOptions, ModelSdk,
+    TaskKind, TranscriptionOptions,
 };
 const LLAMA_ENGINE_ID: &str = "llama-cpu";
+
+#[test]
+#[ignore = "requires a test image and either network access or local ONNX Runtime and YOLO weights"]
+fn detects_objects_with_yolo() {
+    let image = std::env::var("MODEL_SDK_YOLO_IMAGE").unwrap();
+    let model_id =
+        std::env::var("MODEL_SDK_YOLO_MODEL_ID").unwrap_or_else(|_| "yolov8n-det-fp32".into());
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("model-sdk-yolo-smoke-{nonce}"));
+    let sdk = ModelSdk::new(&root).unwrap();
+    let task = TaskControl::default();
+    sdk.validate_pair_for("onnxruntime-cpu", &model_id, TaskKind::ObjectDetection)
+        .unwrap();
+    if let Ok(engine) = std::env::var("MODEL_SDK_YOLO_ENGINE") {
+        sdk.register_local_engine("onnxruntime-cpu", Path::new(&engine))
+            .unwrap();
+    } else {
+        sdk.download_engine("onnxruntime-cpu", &task).unwrap();
+    }
+    if let Ok(model) = std::env::var("MODEL_SDK_YOLO_MODEL") {
+        sdk.register_local_model(&model_id, Path::new(&model))
+            .unwrap();
+    } else {
+        sdk.download_model(&model_id, false, &task).unwrap();
+    }
+    assert!(
+        sdk.check("onnxruntime-cpu", &model_id, TaskKind::ObjectDetection)
+            .unwrap()
+            .ready
+    );
+    let result = sdk
+        .detect_objects(
+            "onnxruntime-cpu",
+            &model_id,
+            Path::new(&image),
+            &DetectionOptions::default(),
+            &task,
+        )
+        .unwrap();
+    assert!(result.image_width > 0 && result.image_height > 0);
+    assert!(result.detections.iter().all(|item| {
+        item.class_id < 80
+            && item.confidence >= 0.25
+            && item.x1 >= 0.0
+            && item.y1 >= 0.0
+            && item.x2 <= result.image_width as f32
+            && item.y2 <= result.image_height as f32
+            && item.x1 < item.x2
+            && item.y1 < item.y2
+    }));
+    if let Ok(label) = std::env::var("MODEL_SDK_YOLO_EXPECT_LABEL") {
+        assert!(result.detections.iter().any(|item| item.label == label));
+    }
+    drop(sdk);
+    std::fs::remove_dir_all(root).unwrap();
+}
 
 #[test]
 #[ignore = "requires locally installed engine, model, FFmpeg, and speech audio"]

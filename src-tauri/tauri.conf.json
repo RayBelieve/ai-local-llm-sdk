@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "字幕工作台",
+  "productName": "Model SDK 调试台",
   "version": "0.1.0",
   "identifier": "com.subtitleworkbench.desktop",
   "build": {
@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "字幕工作台", "width": 1320, "height": 820, "minWidth": 920, "minHeight": 620 }],
+    "windows": [{ "title": "Model SDK 调试台", "width": 1320, "height": 820, "minWidth": 920, "minHeight": 620 }],
     "security": { "assetProtocol": { "enable": true, "scope": [] } }
   },
   "bundle": { "active": true, "targets": "all" }

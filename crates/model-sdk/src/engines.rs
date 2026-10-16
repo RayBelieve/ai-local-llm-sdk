@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     catalog::{ArtifactFormat, ModelProfile, TaskKind},
+    detect::{DetectionOptions, DetectionResult},
     diagnostics,
     infer::TranscriptionOptions,
     process::hidden_command,
@@ -20,6 +21,7 @@ pub(crate) enum Family {
     CrispAsr,
     OpenVino,
     Llama,
+    OnnxRuntime,
 }
 
 pub(crate) struct Adapter {
@@ -90,6 +92,12 @@ pub(crate) const ADAPTERS: &[Adapter] = &[
         variant: "cuda13",
         task: TaskKind::TextGeneration,
     },
+    Adapter {
+        id: "onnxruntime-cpu",
+        family: Family::OnnxRuntime,
+        variant: "cpu",
+        task: TaskKind::ObjectDetection,
+    },
 ];
 
 pub(crate) struct AudioRequest<'a> {
@@ -122,6 +130,7 @@ impl Adapter {
                 Family::CrispAsr => crispasr::supports(profile, format),
                 Family::OpenVino => openvino::supports(profile, format),
                 Family::Llama => llama::supports(profile, format),
+                Family::OnnxRuntime => onnxruntime::supports(profile, format),
             }
     }
 
@@ -130,6 +139,7 @@ impl Adapter {
             Family::CrispAsr => crispasr::managed_path(root, self.id),
             Family::OpenVino => openvino::managed_path(root),
             Family::Llama => llama::managed_path(root, self.id),
+            Family::OnnxRuntime => onnxruntime::managed_path(root),
         }
     }
 
@@ -142,6 +152,7 @@ impl Adapter {
             Family::CrispAsr => crispasr::suitability(self.id, system, path)?,
             Family::OpenVino => openvino::suitability(system, path),
             Family::Llama => llama::suitability(self.variant, system),
+            Family::OnnxRuntime => onnxruntime::suitability(system, path),
         })
     }
 
@@ -156,10 +167,19 @@ impl Adapter {
                 }
             }
             Family::Llama => "llama-server.exe",
+            Family::OnnxRuntime => {
+                if cfg!(windows) {
+                    "python.exe"
+                } else {
+                    "python3"
+                }
+            }
         };
         let valid_name = path.file_name().is_some_and(|name| {
             name.to_string_lossy().eq_ignore_ascii_case(expected)
-                || (self.family == Family::OpenVino && !cfg!(windows) && name == "python")
+                || (matches!(self.family, Family::OpenVino | Family::OnnxRuntime)
+                    && !cfg!(windows)
+                    && name == "python")
         });
         if !path.is_absolute() || !path.is_file() || !valid_name {
             return Err(format!("请选择有效的 {expected} 完整路径。"));
@@ -201,6 +221,7 @@ impl Adapter {
                     Err("llama.cpp 运行时无法启动。".into())
                 }
             }
+            Family::OnnxRuntime => onnxruntime::probe(path, model),
         }
     }
 
@@ -209,6 +230,22 @@ impl Adapter {
             Family::CrispAsr => crispasr::transcribe(self.id, request),
             Family::OpenVino => openvino::transcribe(request),
             Family::Llama => Err("文本生成引擎不能执行语音转写。".into()),
+            Family::OnnxRuntime => Err("视觉检测引擎不能执行语音转写。".into()),
+        }
+    }
+
+    pub fn detect(
+        &self,
+        sdk: &ModelSdk,
+        engine: &Path,
+        model: &Path,
+        image: &Path,
+        options: &DetectionOptions,
+        task: &TaskControl,
+    ) -> Result<DetectionResult, String> {
+        match self.family {
+            Family::OnnxRuntime => onnxruntime::detect(sdk, engine, model, image, options, task),
+            _ => Err("所选引擎不支持目标检测。".into()),
         }
     }
 }
@@ -361,5 +398,133 @@ mod llama {
             _ => None,
         };
         (reason.is_none(), reason)
+    }
+}
+
+pub(crate) mod onnxruntime {
+    use super::*;
+    use std::{
+        fs::{self, File},
+        process::Stdio,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(0);
+
+    pub fn supports(profile: ModelProfile, format: ArtifactFormat) -> bool {
+        matches!(
+            profile,
+            ModelProfile::YoloV8Detect | ModelProfile::Yolo11Detect
+        ) && format == ArtifactFormat::Onnx
+    }
+
+    pub fn managed_path(root: &Path) -> PathBuf {
+        if cfg!(windows) {
+            root.join("engines/onnxruntime-cpu/venv/Scripts/python.exe")
+        } else {
+            root.join("engines/onnxruntime-cpu/venv/bin/python3")
+        }
+    }
+
+    pub fn suitability(
+        system: &diagnostics::SystemCheck,
+        path: Option<&Path>,
+    ) -> (bool, Option<String>) {
+        let suitable =
+            (system.platform == "windows" && system.architecture == "x86_64") || path.is_some();
+        (
+            suitable,
+            (!suitable).then_some("ONNX Runtime 自动安装目前仅支持 Windows x86-64。".into()),
+        )
+    }
+
+    pub fn probe(python: &Path, model: Option<(&Path, ModelProfile)>) -> Result<(), String> {
+        let mut command = hidden_command(python);
+        if let Some((model, _)) = model {
+            command
+                .args(["-c", "import json,onnxruntime as o,sys; s=o.InferenceSession(sys.argv[1],providers=['CPUExecutionProvider']); assert s.get_inputs()[0].shape == [1,3,640,640]; assert s.get_outputs()[0].shape == [1,84,8400]; assert len(json.loads(s.get_modelmeta().custom_metadata_map['labels'])) == 80"])
+                .arg(model);
+        } else {
+            command.args(["-c", "import onnxruntime, numpy, PIL"]);
+        }
+        if command.output().is_ok_and(|output| output.status.success()) {
+            Ok(())
+        } else {
+            Err("ONNX Runtime 环境或模型输出协议无法运行。".into())
+        }
+    }
+
+    pub fn detect(
+        sdk: &ModelSdk,
+        python: &Path,
+        model: &Path,
+        image: &Path,
+        options: &DetectionOptions,
+        task: &TaskControl,
+    ) -> Result<DetectionResult, String> {
+        let worker_dir = sdk.root().join("workers/onnxruntime");
+        fs::create_dir_all(&worker_dir).map_err(|error| error.to_string())?;
+        let worker = worker_dir.join("worker.py");
+        let contents = include_bytes!("../workers/onnxruntime/worker.py");
+        if !fs::read(&worker).is_ok_and(|current| current == contents) {
+            fs::write(&worker, contents).map_err(|error| error.to_string())?;
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_nanos();
+        let job = sdk.root().join("jobs").join(format!(
+            "detect-{}-{nonce}-{}",
+            std::process::id(),
+            NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&job).map_err(|error| error.to_string())?;
+        let output = job.join("result.json");
+        let log = job.join("worker.log");
+        let result = (|| {
+            let mut command = hidden_command(python);
+            command
+                .arg(&worker)
+                .arg("--model")
+                .arg(model)
+                .arg("--image")
+                .arg(image)
+                .arg("--output")
+                .arg(&output)
+                .arg("--confidence")
+                .arg(options.confidence_threshold.to_string())
+                .arg("--iou")
+                .arg(options.iou_threshold.to_string())
+                .arg("--max-detections")
+                .arg(options.max_detections.to_string())
+                .stdout(Stdio::null())
+                .stderr(Stdio::from(
+                    File::create(&log).map_err(|error| error.to_string())?,
+                ));
+            task.progress("detect", 0, "正在检测图片");
+            let status = task.run(command)?;
+            if !status.success() {
+                let detail = fs::read_to_string(&log).unwrap_or_default();
+                return Err(format!(
+                    "目标检测失败 ({status}): {}",
+                    detail
+                        .chars()
+                        .rev()
+                        .take(1000)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>()
+                ));
+            }
+            task.check_cancelled()?;
+            let result =
+                serde_json::from_slice(&fs::read(output).map_err(|error| error.to_string())?)
+                    .map_err(|error| format!("检测结果无效: {error}"))?;
+            task.progress("detect", 100, "图片检测完成");
+            Ok(result)
+        })();
+        let _ = fs::remove_dir_all(job);
+        result
     }
 }

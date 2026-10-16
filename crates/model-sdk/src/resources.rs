@@ -12,6 +12,7 @@ use crate::catalog::{ArtifactFormat, ModelProfile, TaskKind};
 
 pub const ENGINE_VERSION: &str = "v0.8.33";
 pub const LLAMA_ENGINE_VERSION: &str = "b9500";
+pub const ONNXRUNTIME_ENGINE_VERSION: &str = "1.30.0";
 pub const HY_MT_MODEL_ID: &str = "hy-mt-1.5-1.8b-q4";
 pub const OPENVINO_ENGINE_ID: &str = "openvino-cpu";
 pub const OPENVINO_MODEL_ID: &str = "qwen3-asr-0.6b-int8";
@@ -311,6 +312,50 @@ pub const MODELS: &[ModelSpec] = &[
         size: 1_133_080_512,
         sha256: "4383ac0c3c8e476de98ff979c2a3f069f8c4fb385e7860cf2d28da896cc477c7",
     },
+    ModelSpec {
+        id: "yolov8n-det-fp32",
+        label: "YOLOv8 Nano Detection FP32",
+        file: "yolov8n-det-fp32.onnx",
+        repo: "EdgeFirst/yolov8-det",
+        format: ArtifactFormat::Onnx,
+        profile: ModelProfile::YoloV8Detect,
+        task: TaskKind::ObjectDetection,
+        size: 12_873_047,
+        sha256: "2f6148e3dca2493865f48c88186f2127e5ffe292d83b6d3df783d551def49a66",
+    },
+    ModelSpec {
+        id: "yolov8s-det-fp32",
+        label: "YOLOv8 Small Detection FP32",
+        file: "yolov8s-det-fp32.onnx",
+        repo: "EdgeFirst/yolov8-det",
+        format: ArtifactFormat::Onnx,
+        profile: ModelProfile::YoloV8Detect,
+        task: TaskKind::ObjectDetection,
+        size: 44_891_767,
+        sha256: "ce0bc0ae36df2fa5b933dc8a69d9e0edb7085a4472160cd1d4590edd7677960a",
+    },
+    ModelSpec {
+        id: "yolo11n-det-fp32",
+        label: "YOLO11 Nano Detection FP32",
+        file: "yolo11n-det-fp32.onnx",
+        repo: "EdgeFirst/yolo11-det",
+        format: ArtifactFormat::Onnx,
+        profile: ModelProfile::Yolo11Detect,
+        task: TaskKind::ObjectDetection,
+        size: 10_756_872,
+        sha256: "40e2f56bf626fab2d4851148f7516c6e36f852c8a42d77fd2439c4505d8f04e7",
+    },
+    ModelSpec {
+        id: "yolo11s-det-fp32",
+        label: "YOLO11 Small Detection FP32",
+        file: "yolo11s-det-fp32.onnx",
+        repo: "EdgeFirst/yolo11-det",
+        format: ArtifactFormat::Onnx,
+        profile: ModelProfile::Yolo11Detect,
+        task: TaskKind::ObjectDetection,
+        size: 38_067_151,
+        sha256: "0dd27fa741bce2dbc0d26d0dbfb5ae7dcb851d3dbcd91298eba1cef9464d4f1b",
+    },
 ];
 
 pub fn engine_spec(id: &str) -> Result<&'static EngineSpec, String> {
@@ -333,7 +378,20 @@ pub fn model_url(spec: &ModelSpec, mirror: bool) -> String {
     } else {
         "https://huggingface.co"
     };
-    format!("{host}/{}/resolve/main/{}", spec.repo, spec.file)
+    let revision = match spec.profile {
+        ModelProfile::YoloV8Detect => "7fb4413528af0e22c489e7b85839df6e21fa221f",
+        ModelProfile::Yolo11Detect => "6a09aa9c4b5e98370b84cacc97e79b2a9a7ae5cb",
+        _ => "main",
+    };
+    let subdir = if spec.format == ArtifactFormat::Onnx {
+        "onnx/"
+    } else {
+        ""
+    };
+    format!(
+        "{host}/{}/resolve/{revision}/{subdir}{}",
+        spec.repo, spec.file
+    )
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -542,6 +600,23 @@ mod tests {
             assert_eq!(spec.sha256.len(), 64);
             assert!(model_url(spec, false).contains(spec.repo));
             assert!(model_url(spec, true).starts_with("https://hf-mirror.com/"));
+        }
+    }
+
+    #[test]
+    fn yolo_downloads_use_pinned_onnx_revisions() {
+        for id in [
+            "yolov8n-det-fp32",
+            "yolov8s-det-fp32",
+            "yolo11n-det-fp32",
+            "yolo11s-det-fp32",
+        ] {
+            let spec = model_spec(id).unwrap();
+            let url = model_url(spec, false);
+            assert!(url.contains("/resolve/"));
+            assert!(url.contains("/onnx/"));
+            assert!(url.ends_with(spec.file));
+            assert_eq!(spec.task, TaskKind::ObjectDetection);
         }
     }
 

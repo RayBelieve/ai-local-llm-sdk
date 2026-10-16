@@ -4,24 +4,25 @@
 
 ## 目录类型
 
-- `TaskKind::Transcription`：语音转写；`TaskKind::TextGeneration`：文本生成。
-- `ArtifactFormat::Ggml`、`Gguf`、`OpenVinoIr`：权重的文件格式，不编码 provider。
-- `ModelProfile::Whisper`、`Qwen3Asr17b`、`Qwen3Asr06b`、`HyMt15`：模型架构及推理协议。格式相同不代表适配器一定支持。
+- `TaskKind::Transcription`：语音转写；`TaskKind::TextGeneration`：文本生成；`TaskKind::ObjectDetection`：图片目标检测。
+- `ArtifactFormat::Ggml`、`Gguf`、`OpenVinoIr`、`Onnx`：权重的文件格式，不编码 provider。
+- `ModelProfile::Whisper`、`Qwen3Asr17b`、`Qwen3Asr06b`、`HyMt15`、`YoloV8Detect`、`Yolo11Detect`：模型架构及推理协议。格式相同不代表适配器一定支持。
 - `ModelDescriptor`：`id`、`label`、`profile`、`artifact_format`、`task`。
 - `InstalledModel`：`descriptor`、已验证的 `path`、`size_bytes`、`downloadable`；没有唯一 provider 字段。
 - `EngineInfo`：`id`、`family`、`variant`、`label`、`version`、`download_mb`、`path`、`suitable`、`reason`、`task`。
 
-现有模型为 11 个文件模型加 1 个 OpenVINO IR 目录模型。Whisper GGML 共 6 份；Qwen3-ASR 1.7B GGUF 共 4 份；HY-MT1.5 GGUF 共 1 份；Qwen3-ASR 0.6B INT8 OpenVINO IR 共 1 份。
+现有模型为 15 个文件模型加 1 个 OpenVINO IR 目录模型。Whisper GGML 共 6 份；Qwen3-ASR 1.7B GGUF 共 4 份；HY-MT1.5 GGUF 共 1 份；Qwen3-ASR 0.6B INT8 OpenVINO IR 共 1 份；YOLOv8/YOLO11 检测 ONNX 各有 Nano、Small 两份。
 
 ## 引擎 ID
 
 - CrispASR：`crispasr-vulkan`、`crispasr-cuda12`、`crispasr-cuda13`、`crispasr-cpu`、`crispasr-cpu-legacy`。
 - OpenVINO：`openvino-cpu`。
 - llama.cpp：`llama-cpu`、`llama-vulkan`、`llama-cuda12`、`llama-cuda13`。
+- ONNX Runtime：`onnxruntime-cpu`。
 
 每个 ID 代表可独立安装的具体运行时。llama.cpp 变体保存在 `engines/<engine_id>/` 下，可以并存。引擎家族与变体也作为 `EngineInfo` 的独立字段返回。
 
-内部静态适配器注册表位于 `src/engines.rs`；其中的引擎家族模块负责支持规则、适用性、路径解析、运行探测和转写执行。目录元数据位于 `src/catalog.rs` 与 `src/resources.rs`。安装实现分别位于 `src/install/crispasr.rs`、`openvino.rs`、`llama.rs`；`src/infer.rs` 负责通用音频准备和任务分发，`src/generate.rs` 负责 llama.cpp 文本生成。SDK 没有外部适配器注册或通用 JSON 推理接口。
+内部静态适配器注册表位于 `src/engines.rs`；其中的引擎家族模块负责支持规则、适用性、路径解析、运行探测和执行。目录元数据位于 `src/catalog.rs` 与 `src/resources.rs`。安装实现分别位于 `src/install/crispasr.rs`、`openvino.rs`、`llama.rs`、`onnxruntime.rs`；`src/infer.rs` 负责音频转写，`src/generate.rs` 负责文本生成，`src/detect.rs` 定义视觉检测接口。SDK 没有外部适配器注册或通用 JSON 推理接口。
 
 ## ModelSdk
 
@@ -47,10 +48,13 @@
 - `generate_chat(engine_id, model_id, messages, options, task)`：完整对话文本生成。
 - `generate_chat_stream(engine_id, model_id, messages, options, task, on_delta)`：逐段回调，成功时也返回完整文本。
 - `stop_text_generation()`：关闭当前 SDK 实例持有的 llama.cpp 服务。
+- `detect_objects(engine_id, model_id, image, &DetectionOptions, task) -> DetectionResult`：单张图片目标检测。`DetectionOptions` 包含置信度阈值（默认 0.25）、NMS IoU 阈值（默认 0.45）和最大目标数（默认 100）。结果含图片宽高，以及类别 ID/名称、置信度与原图像素坐标 `x1,y1,x2,y2`。
 
-`TaskControl` 提供进度回调和取消；下载、音频处理、模型探测和生成调用会检查取消状态。直接传入任意引擎及模型路径进行推理的公开入口已移除。
+`TaskControl` 提供进度回调和取消；`cancel()` 会终止正在运行的子进程，并中断进行中的下载连接。音频处理、模型探测和生成调用也会检查取消状态。直接传入任意引擎及模型路径进行推理的公开入口已移除。
 
 OpenVINO worker、VAD 与 ForcedAligner 的安装和离线导入辅助接口仍可由 `ModelSdk` 使用；FFmpeg 可用 `install_ffmpeg(task)` 安装。真实推理需本机资源，见忽略的 `tests/smoke.rs`。
+
+首批检测模型 ID 为 `yolov8n-det-fp32`、`yolov8s-det-fp32`、`yolo11n-det-fp32`、`yolo11s-det-fp32`。权重来自 EdgeFirst Model Zoo 的固定提交，按大小和 SHA-256 验证，包含 COCO 80 类标签元数据；输入为 640×640 RGB FP32，输出为归一化检测框，SDK 执行 letterbox、坐标还原和按类别 NMS。`onnxruntime-cpu` 在 Windows x86-64 可自动安装独立的 Python/ONNX Runtime 环境，其他平台可登记已装齐 `onnxruntime`、`numpy`、`Pillow` 的 Python。模型标记为 AGPL-3.0，分发前需核对其许可证要求。桌面调试台提供独立的图片检测调用。
 
 ## 示例
 

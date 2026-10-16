@@ -8,9 +8,12 @@ use std::{
     time::Duration,
 };
 
+pub(crate) const CANCELLED_ERROR: &str = "任务已取消。";
+
 pub struct TaskControl {
     child: Mutex<Option<Child>>,
     cancelled: AtomicBool,
+    cancel_notify: tokio::sync::Notify,
     progress: Box<dyn Fn(&str, u8, &str) + Send + Sync>,
 }
 
@@ -19,6 +22,7 @@ impl TaskControl {
         Self {
             child: Mutex::new(None),
             cancelled: AtomicBool::new(false),
+            cancel_notify: tokio::sync::Notify::new(),
             progress: Box::new(progress),
         }
     }
@@ -29,10 +33,23 @@ impl TaskControl {
 
     pub fn check_cancelled(&self) -> Result<(), String> {
         if self.cancelled.load(Ordering::SeqCst) {
-            Err("任务已取消。".into())
+            Err(CANCELLED_ERROR.into())
         } else {
             Ok(())
         }
+    }
+
+    pub(crate) async fn cancelled(&self) {
+        if self.cancelled.load(Ordering::SeqCst) {
+            return;
+        }
+        let notified = self.cancel_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.cancelled.load(Ordering::SeqCst) {
+            return;
+        }
+        notified.await;
     }
 
     pub fn run(&self, mut command: Command) -> Result<ExitStatus, String> {
@@ -66,13 +83,14 @@ impl TaskControl {
                         return Err(error.to_string());
                     }
                 },
-                None => return Err("任务已取消。".into()),
+                None => return Err(CANCELLED_ERROR.into()),
             }
         }
     }
 
     pub fn cancel(&self) -> Result<(), String> {
         self.cancelled.store(true, Ordering::SeqCst);
+        self.cancel_notify.notify_waiters();
         let mut active = self.child.lock().map_err(|error| error.to_string())?;
         if let Some(mut child) = active.take() {
             child.kill().map_err(|error| error.to_string())?;
@@ -121,5 +139,34 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         task.cancel().unwrap();
         assert!(child.join().unwrap().is_err());
+    }
+
+    #[test]
+    fn cancellation_wakes_an_async_wait() {
+        let task = std::sync::Arc::new(TaskControl::default());
+        let waiting = task.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let wait = waiting.cancelled();
+                tokio::pin!(wait);
+                tokio::select! {
+                    _ = &mut wait => panic!("cancelled before the wait was parked"),
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                        let _ = started_tx.send(());
+                        tokio::time::timeout(Duration::from_secs(2), wait)
+                            .await
+                            .unwrap();
+                    }
+                }
+            });
+        });
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        task.cancel().unwrap();
+        worker.join().unwrap();
     }
 }

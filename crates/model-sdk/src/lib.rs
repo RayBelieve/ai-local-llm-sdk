@@ -1,4 +1,5 @@
 pub mod catalog;
+mod detect;
 pub mod diagnostics;
 mod engines;
 mod generate;
@@ -14,6 +15,7 @@ pub mod subtitle;
 pub mod task;
 
 pub use catalog::{ArtifactFormat, ModelProfile, TaskKind};
+pub use detect::{Detection, DetectionOptions, DetectionResult};
 pub use generate::{ChatMessage, ChatRole, GenerationOptions};
 pub use infer::TranscriptionOptions;
 pub use sdk::{EngineInfo, InstalledModel, ModelDescriptor, ModelSdk, Readiness};
