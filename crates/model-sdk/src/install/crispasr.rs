@@ -132,6 +132,49 @@ impl ModelSdk {
         mirror: bool,
         task: &TaskControl,
     ) -> Result<PathBuf, String> {
+        if id == resources::KOKORO_MODEL_ID {
+            let dir = self.root().join("models/kokoro-82m-v1.1-zh");
+            fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+            let host = if mirror {
+                "https://hf-mirror.com"
+            } else {
+                "https://huggingface.co"
+            };
+            for (name, remote, size, hash) in resources::KOKORO_FILES {
+                task.check_cancelled()?;
+                let path = dir.join(name);
+                if path.metadata().is_ok_and(|meta| meta.len() == *size)
+                    && super::verify_sha256(&path, hash).is_ok()
+                {
+                    continue;
+                }
+                let staged = dir.join(format!("{name}.download"));
+                let result = (|| {
+                    download_to(
+                        &format!(
+                            "{host}/onnx-community/Kokoro-82M-v1.1-zh-ONNX/resolve/{}/{remote}",
+                            resources::KOKORO_REVISION
+                        ),
+                        &staged,
+                        "model",
+                        task,
+                    )?;
+                    if staged.metadata().map_err(|error| error.to_string())?.len() != *size {
+                        return Err(format!("模型文件大小不符: {name}"));
+                    }
+                    super::verify_sha256(&staged, hash)?;
+                    replace_file(&staged, &path)
+                })();
+                if result.is_err() {
+                    let _ = fs::remove_file(&staged);
+                }
+                result?;
+            }
+            resources::verify_kokoro_model(&dir)?;
+            self.clear_model_override(id)?;
+            task.progress("model", 100, "Kokoro 模型已就绪");
+            return Ok(dir);
+        }
         if let Some(spec) = resources::wd14_spec(id) {
             let dir = self.root().join("models/wd14").join(id);
             fs::create_dir_all(&dir).map_err(|error| error.to_string())?;

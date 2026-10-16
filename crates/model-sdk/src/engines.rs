@@ -97,7 +97,11 @@ pub(crate) const ADAPTERS: &[Adapter] = &[
         id: "onnxruntime-cpu",
         family: Family::OnnxRuntime,
         variant: "cpu",
-        tasks: &[TaskKind::ObjectDetection, TaskKind::ImageTagging],
+        tasks: &[
+            TaskKind::ObjectDetection,
+            TaskKind::ImageTagging,
+            TaskKind::SpeechSynthesis,
+        ],
     },
 ];
 
@@ -436,7 +440,7 @@ pub(crate) mod onnxruntime {
                 ) | (
                     ModelProfile::Wd14V2 | ModelProfile::Wd14V3,
                     TaskKind::ImageTagging
-                )
+                ) | (ModelProfile::KokoroZh, TaskKind::SpeechSynthesis)
             )
     }
 
@@ -463,7 +467,9 @@ pub(crate) mod onnxruntime {
     pub fn probe(python: &Path, model: Option<(&Path, ModelProfile)>) -> Result<(), String> {
         let mut command = hidden_command(python);
         if let Some((model, profile)) = model {
-            if matches!(profile, ModelProfile::Wd14V2 | ModelProfile::Wd14V3) {
+            if profile == ModelProfile::KokoroZh {
+                command.args(["-c", "import misaki.zh; import json,onnxruntime as o,sys; from pathlib import Path; p=Path(sys.argv[1]); s=o.InferenceSession(str(p/'model.onnx'),providers=['CPUExecutionProvider']); assert {i.name for i in s.get_inputs()} == {'input_ids','style','speed'}; assert len(s.get_outputs()) >= 1; assert json.loads((p/'tokenizer.json').read_text(encoding='utf-8'))['model']['vocab']['$'] == 0"]).arg(model);
+            } else if matches!(profile, ModelProfile::Wd14V2 | ModelProfile::Wd14V3) {
                 command.args(["-c", "import csv,onnxruntime as o,sys; from pathlib import Path; p=Path(sys.argv[1]); s=o.InferenceSession(str(p/'model.onnx'),providers=['CPUExecutionProvider']); i=s.get_inputs()[0].shape; rows=list(csv.DictReader((p/'selected_tags.csv').open(encoding='utf-8'))); assert len(i)==4 and i[1]==i[2] and i[3]==3; assert len(s.get_outputs())==1 and s.get_outputs()[0].shape[-1]==len(rows); assert rows and all(k in rows[0] for k in ('name','category'))"]).arg(model);
             } else {
                 command.args(["-c", "import json,onnxruntime as o,sys; s=o.InferenceSession(sys.argv[1],providers=['CPUExecutionProvider']); assert s.get_inputs()[0].shape == [1,3,640,640]; assert s.get_outputs()[0].shape == [1,84,8400]; assert len(json.loads(s.get_modelmeta().custom_metadata_map['labels'])) == 80"]).arg(model);
@@ -471,11 +477,105 @@ pub(crate) mod onnxruntime {
         } else {
             command.args(["-c", "import onnxruntime, numpy, PIL"]);
         }
-        if command.output().is_ok_and(|output| output.status.success()) {
-            Ok(())
-        } else {
-            Err("ONNX Runtime 环境或模型输出协议无法运行。".into())
+        if let Ok(output) = command.output() {
+            if output.status.success() {
+                return Ok(());
+            }
+            if model.is_some_and(|(_, profile)| profile == ModelProfile::KokoroZh)
+                && String::from_utf8_lossy(&output.stderr).contains("ModuleNotFoundError")
+            {
+                return Err(
+                    "中文语音依赖缺失，请在资源与兼容性中重新安装 ONNX Runtime 引擎。".into(),
+                );
+            }
         }
+        Err("ONNX Runtime 环境或模型输出协议无法运行。".into())
+    }
+
+    pub fn synthesize(
+        sdk: &ModelSdk,
+        python: &Path,
+        model: &Path,
+        text: &str,
+        speed: f32,
+        output: &Path,
+        task: &TaskControl,
+    ) -> Result<(), String> {
+        let worker_dir = sdk.root().join("workers/onnxruntime");
+        fs::create_dir_all(&worker_dir).map_err(|error| error.to_string())?;
+        let worker = worker_dir.join("synthesize_worker.py");
+        let contents = include_bytes!("../workers/onnxruntime/synthesize_worker.py");
+        if !fs::read(&worker).is_ok_and(|current| current == contents) {
+            fs::write(&worker, contents).map_err(|error| error.to_string())?;
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_nanos();
+        let job = sdk.root().join("jobs").join(format!(
+            "synthesize-{}-{nonce}-{}",
+            std::process::id(),
+            NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&job).map_err(|error| error.to_string())?;
+        let result = (|| {
+            let input = job.join("text.txt");
+            fs::write(&input, text).map_err(|error| error.to_string())?;
+            let wav = job.join("speech.wav");
+            let log = job.join("worker.log");
+            let mut command = hidden_command(python);
+            command
+                .arg(&worker)
+                .arg("--model")
+                .arg(model)
+                .arg("--text-file")
+                .arg(&input)
+                .arg("--output")
+                .arg(&wav)
+                .arg("--speed")
+                .arg(speed.to_string())
+                .stdout(Stdio::null())
+                .stderr(Stdio::from(
+                    File::create(&log).map_err(|error| error.to_string())?,
+                ));
+            task.progress("synthesize", 0, "正在合成语音");
+            let status = task.run(command)?;
+            if !status.success() {
+                let detail = fs::read_to_string(log).unwrap_or_default();
+                return Err(format!(
+                    "语音合成失败 ({status}): {}",
+                    detail
+                        .chars()
+                        .rev()
+                        .take(1000)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>()
+                ));
+            }
+            task.check_cancelled()?;
+            let mut source = File::open(wav).map_err(|error| error.to_string())?;
+            let mut target = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(output)
+                .map_err(|error| format!("无法创建输出文件 {}: {error}", output.display()))?;
+            if let Err(error) = std::io::copy(&mut source, &mut target) {
+                drop(target);
+                let _ = fs::remove_file(output);
+                return Err(error.to_string());
+            }
+            if let Err(error) = task.check_cancelled() {
+                drop(target);
+                let _ = fs::remove_file(output);
+                return Err(error);
+            }
+            task.progress("synthesize", 100, "语音合成完成");
+            Ok(())
+        })();
+        let _ = fs::remove_dir_all(job);
+        result
     }
 
     pub fn detect(

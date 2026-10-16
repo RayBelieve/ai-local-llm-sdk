@@ -12,6 +12,7 @@ mod provider;
 pub mod resources;
 mod sdk;
 pub mod subtitle;
+mod synthesize;
 mod tag;
 pub mod task;
 

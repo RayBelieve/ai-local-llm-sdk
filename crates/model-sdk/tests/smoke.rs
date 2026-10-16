@@ -7,6 +7,43 @@ use model_sdk::{
 const LLAMA_ENGINE_ID: &str = "llama-cpu";
 
 #[test]
+#[ignore = "requires Kokoro model directory and ONNX Runtime Python with misaki[zh]"]
+fn synthesizes_chinese_with_kokoro() {
+    let model = std::env::var("MODEL_SDK_KOKORO_MODEL").unwrap();
+    let engine = std::env::var("MODEL_SDK_KOKORO_ENGINE").unwrap();
+    let root = std::env::temp_dir().join(format!("model-sdk-kokoro-smoke-{}", std::process::id()));
+    let sdk = ModelSdk::new(&root).unwrap();
+    let task = TaskControl::default();
+    sdk.register_local_engine("onnxruntime-cpu", Path::new(&engine))
+        .unwrap();
+    sdk.register_local_model(model_sdk::resources::KOKORO_MODEL_ID, Path::new(&model))
+        .unwrap();
+    assert!(
+        sdk.check(
+            "onnxruntime-cpu",
+            model_sdk::resources::KOKORO_MODEL_ID,
+            TaskKind::SpeechSynthesis
+        )
+        .unwrap()
+        .ready
+    );
+    let output = root.join("speech.wav");
+    sdk.synthesize_speech(
+        "onnxruntime-cpu",
+        model_sdk::resources::KOKORO_MODEL_ID,
+        "你好，欢迎使用语音合成。",
+        1.0,
+        &output,
+        &task,
+    )
+    .unwrap();
+    let bytes = std::fs::read(output).unwrap();
+    assert!(bytes.starts_with(b"RIFF") && bytes.len() > 44);
+    drop(sdk);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 #[ignore = "requires a local WD-14 model directory, ONNX Runtime Python, and test image"]
 fn tags_image_with_wd14() {
     let image = std::env::var("MODEL_SDK_WD14_IMAGE").unwrap();

@@ -1,6 +1,6 @@
 # Model SDK 调试台
 
-这个仓库以 `crates/model-sdk/` 为核心。Tauri 桌面端仅用于逐项验证 SDK：查看内置目录、安装或登记资源、检查引擎与模型兼容性，然后独立调用转写、文本生成和图片目标检测接口。桌面端不组合这些任务，也不保存工作流选择。
+这个仓库以 `crates/model-sdk/` 为核心。Tauri 桌面端仅用于逐项验证 SDK：查看内置目录、安装或登记资源、检查引擎与模型兼容性，然后独立调用转写、文本生成、语音合成和图片处理接口。桌面端不组合这些任务，也不保存工作流选择。
 
 ## 运行
 
@@ -18,6 +18,7 @@ npm run tauri dev
 - **资源与兼容性**：按任务选择具体引擎和内置模型，分别调用 `validate_pair_for` 与 `check`，查看静态兼容及运行就绪；可下载或登记运行时、模型、FFmpeg 与转写对齐模型。
 - **语音转写**：选择音视频，分别调用 `transcribe` 和 `transcribe_with_options`；后者可设置识别语言与时间轴对齐，两种接口均可设置 VAD 和 FFmpeg。查看分段、时间戳与原始返回值。
 - **文本生成**：分别调用 `generate_text`、`generate_chat`、`generate_chat_stream`；对话模式可编辑消息角色和内容，流式模式即时显示增量。
+- **语音合成**：安装 ONNX Runtime 和 Kokoro 中文模型后，输入中文、设置语速，调用 `synthesize_speech` 并播放生成的 WAV。
 - **目标检测**：选择图片和 YOLO 权重，调用 `detect_objects`；在原图上查看检测框，并查看类别、置信度、坐标和原始返回值。
 
 任务进度与取消均通过 `TaskControl`。界面选择只作用于当前调用，不改写 SDK 资源目录之外的应用配置。FFmpeg 可使用 PATH、手动路径或 SDK 安装版本。

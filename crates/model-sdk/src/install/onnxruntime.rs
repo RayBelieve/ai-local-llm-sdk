@@ -54,12 +54,44 @@ impl ModelSdk {
         let dir = self.root().join("engines/onnxruntime-cpu");
         fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
         let python = engines::onnxruntime::managed_path(self.root());
-        if dir.join("ready.txt").is_file()
+        let base_ready = dir.join("ready.txt").is_file()
             && python.is_file()
-            && engines::onnxruntime::probe(&python, None).is_ok()
-        {
-            self.clear_engine_override("onnxruntime-cpu")?;
-            return Ok(python);
+            && engines::onnxruntime::probe(&python, None).is_ok();
+        if base_ready {
+            if hidden_command(&python)
+                .args(["-c", "import misaki.zh"])
+                .output()
+                .is_ok_and(|output| output.status.success())
+            {
+                self.clear_engine_override("onnxruntime-cpu")?;
+                return Ok(python);
+            }
+            let uv = dir.join("uv.exe");
+            if uv.is_file() {
+                task.progress("engine", 55, "正在补齐中文语音依赖");
+                install_step(
+                    &uv,
+                    &[
+                        "pip",
+                        "install",
+                        "--python",
+                        python.to_str().ok_or("Python 路径编码无效。")?,
+                        "misaki[zh]==0.9.4",
+                    ],
+                    &dir,
+                    task,
+                )?;
+                if !hidden_command(&python)
+                    .args(["-c", "import misaki.zh"])
+                    .output()
+                    .is_ok_and(|output| output.status.success())
+                {
+                    return Err("中文语音依赖安装后仍无法导入。".into());
+                }
+                self.clear_engine_override("onnxruntime-cpu")?;
+                task.progress("engine", 100, "ONNX Runtime 已就绪");
+                return Ok(python);
+            }
         }
         let _ = fs::remove_file(dir.join("ready.txt"));
         let uv = dir.join("uv.exe");
@@ -124,6 +156,7 @@ impl ModelSdk {
                 "onnxruntime==1.30.0",
                 "numpy==2.5.3",
                 "pillow==12.0.0",
+                "misaki[zh]==0.9.4",
             ],
             &dir,
             task,

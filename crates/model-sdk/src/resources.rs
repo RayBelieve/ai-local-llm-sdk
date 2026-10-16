@@ -16,6 +16,28 @@ pub const ONNXRUNTIME_ENGINE_VERSION: &str = "1.30.0";
 pub const HY_MT_MODEL_ID: &str = "hy-mt-1.5-1.8b-q4";
 pub const OPENVINO_ENGINE_ID: &str = "openvino-cpu";
 pub const OPENVINO_MODEL_ID: &str = "qwen3-asr-0.6b-int8";
+pub const KOKORO_MODEL_ID: &str = "kokoro-82m-v1.1-zh";
+pub const KOKORO_REVISION: &str = "6cc0f0d2ebe369a68b0df87c2b65c1af8c0ac3e3";
+pub const KOKORO_FILES: &[(&str, &str, u64, &str)] = &[
+    (
+        "model.onnx",
+        "onnx/model.onnx",
+        339_369_442,
+        "94b973941b1852754f979be5d5e20be666d5c81d9bb886b88ae1dc85c9b895ca",
+    ),
+    (
+        "tokenizer.json",
+        "tokenizer.json",
+        4_944,
+        "5715a60b09d5e4b9074435d68c6ccd5675b9d48b220e109fdea3cda681e23d15",
+    ),
+    (
+        "zf_001.bin",
+        "voices/zf_001.bin",
+        522_240,
+        "0a89ec12bb93fb9c74077924daf02568baad64e1f869389f5aaee01a386035f8",
+    ),
+];
 pub const OPENVINO_MODEL_FILES: &[&str] = &[
     "audio_encoder_model.bin",
     "audio_encoder_model.xml",
@@ -465,6 +487,27 @@ pub const WD14_MODELS: &[Wd14Spec] = &[
 
 pub fn wd14_spec(id: &str) -> Option<&'static Wd14Spec> {
     WD14_MODELS.iter().find(|spec| spec.id == id)
+}
+
+pub fn verify_kokoro_model(path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(
+            "请选择包含 model.onnx、tokenizer.json 和 zf_001.bin 的 Kokoro 模型目录。".into(),
+        );
+    }
+    for (name, _, size, hash) in KOKORO_FILES {
+        let file = path.join(name);
+        if file
+            .metadata()
+            .map_err(|_| format!("模型缺少 {name}"))?
+            .len()
+            != *size
+        {
+            return Err(format!("模型文件大小不符: {name}"));
+        }
+        crate::install::verify_sha256(&file, hash)?;
+    }
+    Ok(())
 }
 
 pub fn wd14_url(spec: &Wd14Spec, file: &str, mirror: bool) -> String {

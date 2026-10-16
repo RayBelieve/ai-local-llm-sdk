@@ -172,6 +172,15 @@ impl ModelSdk {
                 task: TaskKind::Transcription,
             });
         }
+        if id == resources::KOKORO_MODEL_ID {
+            return Ok(ModelDescriptor {
+                id: id.into(),
+                label: "Kokoro 82M v1.1 中文".into(),
+                profile: ModelProfile::KokoroZh,
+                artifact_format: ArtifactFormat::Onnx,
+                task: TaskKind::SpeechSynthesis,
+            });
+        }
         let spec = resources::model_spec(id)?;
         Ok(ModelDescriptor {
             id: spec.id.into(),
@@ -206,6 +215,17 @@ impl ModelSdk {
             descriptor: Self::descriptor(resources::OPENVINO_MODEL_ID)?,
             path: self.model_path_with(&registry, resources::OPENVINO_MODEL_ID),
             size_bytes: Some(1_281_675_864),
+            downloadable: true,
+        });
+        models.push(InstalledModel {
+            descriptor: Self::descriptor(resources::KOKORO_MODEL_ID)?,
+            path: self.model_path_with(&registry, resources::KOKORO_MODEL_ID),
+            size_bytes: Some(
+                resources::KOKORO_FILES
+                    .iter()
+                    .map(|(_, _, size, _)| size)
+                    .sum(),
+            ),
             downloadable: true,
         });
         Ok(models)
@@ -293,6 +313,8 @@ impl ModelSdk {
         let registered = registry.model_paths.get(id).map(PathBuf::from);
         let managed = if id == resources::OPENVINO_MODEL_ID {
             self.root.join("models/openvino/qwen3_asr_int8")
+        } else if id == resources::KOKORO_MODEL_ID {
+            self.root.join("models/kokoro-82m-v1.1-zh")
         } else if resources::wd14_spec(id).is_some() {
             self.root.join("models/wd14").join(id)
         } else {
@@ -315,6 +337,8 @@ impl ModelSdk {
                 crate::install::verify_sha256(&path.join(name), hash)?;
             }
             Ok(())
+        } else if id == resources::KOKORO_MODEL_ID {
+            resources::verify_kokoro_model(path)
         } else {
             resources::verify_model(path, resources::model_spec(id)?)
         }
@@ -425,7 +449,7 @@ mod tests {
         assert_eq!(engines::ADAPTERS.len(), 11);
         assert_eq!(
             sdk.models().unwrap().len(),
-            resources::MODELS.len() + resources::WD14_MODELS.len() + 1
+            resources::MODELS.len() + resources::WD14_MODELS.len() + 2
         );
         for model in sdk.models().unwrap() {
             for engine in engines::ADAPTERS {
@@ -434,6 +458,7 @@ mod tests {
                     TaskKind::TextGeneration,
                     TaskKind::ObjectDetection,
                     TaskKind::ImageTagging,
+                    TaskKind::SpeechSynthesis,
                 ] {
                     let expected = match engine.family {
                         Family::CrispAsr => {
@@ -471,6 +496,8 @@ mod tests {
                                 .contains(&model.descriptor.id.as_str()))
                                 || (task == TaskKind::ImageTagging
                                     && resources::wd14_spec(&model.descriptor.id).is_some())
+                                || (task == TaskKind::SpeechSynthesis
+                                    && model.descriptor.id == resources::KOKORO_MODEL_ID)
                         }
                     };
                     assert_eq!(
@@ -597,7 +624,7 @@ mod tests {
             b"{ invalid application data",
         )
         .unwrap();
-        assert_eq!(sdk.models().unwrap().len(), 25);
+        assert_eq!(sdk.models().unwrap().len(), 26);
         fs::write(
             sdk.root().join("sdk-resources.json"),
             br#"{"enginePaths":{},"modelPaths":{}}"#,
@@ -611,7 +638,7 @@ mod tests {
         .unwrap();
         assert!(sdk.models().unwrap_err().contains("版本不兼容"));
         sdk.save_registry(&Registry::default()).unwrap();
-        assert_eq!(sdk.models().unwrap().len(), 25);
+        assert_eq!(sdk.models().unwrap().len(), 26);
         let _ = fs::remove_dir_all(sdk.root());
     }
 

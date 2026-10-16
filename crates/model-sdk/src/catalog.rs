@@ -7,6 +7,7 @@ pub enum TaskKind {
     TextGeneration,
     ObjectDetection,
     ImageTagging,
+    SpeechSynthesis,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -35,4 +36,5 @@ pub enum ModelProfile {
     Yolo11Detect,
     Wd14V2,
     Wd14V3,
+    KokoroZh,
 }

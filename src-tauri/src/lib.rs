@@ -426,6 +426,34 @@ async fn test_tag(
 }
 
 #[tauri::command]
+async fn test_synthesize(
+    app: tauri::AppHandle,
+    engine_id: String,
+    model_id: String,
+    text: String,
+    speed: f32,
+) -> Result<String, String> {
+    run_task(app.clone(), move |sdk, task| {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_nanos();
+        let output = sdk
+            .root()
+            .join("outputs")
+            .join(format!("speech-{nonce}.wav"));
+        fs::create_dir_all(output.parent().expect("output parent"))
+            .map_err(|error| error.to_string())?;
+        sdk.synthesize_speech(&engine_id, &model_id, &text, speed, &output, &task)?;
+        app.asset_protocol_scope()
+            .allow_file(&output)
+            .map_err(|error| error.to_string())?;
+        Ok(output.to_string_lossy().into_owned())
+    })
+    .await
+}
+
+#[tauri::command]
 fn cancel_task(app: tauri::AppHandle) -> Result<(), String> {
     let control = app
         .state::<AppState>()
@@ -464,6 +492,7 @@ pub fn run() {
             test_generate,
             test_detect,
             test_tag,
+            test_synthesize,
             cancel_task,
             stop_generation,
         ])
