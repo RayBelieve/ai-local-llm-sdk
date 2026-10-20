@@ -26,7 +26,7 @@ impl ModelSdk {
             return Err("自动安装目前仅支持 Windows x86-64。".into());
         }
         let spec = resources::engine_spec(id)?;
-        let system = diagnostics::system_check(&resources::Selection::default());
+        let system = diagnostics::system_check();
         let (suitable, reason) = diagnostics::suitability(spec, &system);
         if !suitable {
             return Err(reason.unwrap_or_else(|| "此引擎不适合当前设备。".into()));

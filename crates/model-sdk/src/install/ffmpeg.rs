@@ -117,11 +117,7 @@ mod tests {
     #[test]
     #[ignore = "downloads the pinned FFmpeg wheel"]
     fn downloads_and_runs_ffmpeg() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("model-sdk-ffmpeg-{nonce}"));
+        let root = crate::test_support::scratch_path("ffmpeg");
         let sdk = ModelSdk::new(&root).unwrap();
         let executable = sdk.install_ffmpeg(&TaskControl::default()).unwrap();
         assert!(hidden_command(&executable)

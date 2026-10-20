@@ -11,7 +11,8 @@ use crate::{
     catalog::{ArtifactFormat, ModelProfile, TaskKind},
     diagnostics,
     engines::{self, Family},
-    resources::{self, Selection},
+    resources,
+    verify,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -233,7 +234,7 @@ impl ModelSdk {
 
     pub fn engines(&self) -> Result<Vec<EngineInfo>, String> {
         let registry = self.registry()?;
-        let system = diagnostics::system_check(&Selection::default());
+        let system = diagnostics::system_check();
         engines::ADAPTERS
             .iter()
             .map(|adapter| {
@@ -325,23 +326,7 @@ impl ModelSdk {
         registered
             .into_iter()
             .chain(std::iter::once(managed))
-            .find(|path| Self::validate_model(id, path).is_ok())
-    }
-
-    fn validate_model(id: &str, path: &Path) -> Result<(), String> {
-        if let Some(spec) = resources::wd14_spec(id) {
-            resources::verify_wd14_model(path, spec)
-        } else if id == resources::OPENVINO_MODEL_ID {
-            resources::verify_openvino_model(path)?;
-            for (name, hash) in resources::OPENVINO_MODEL_HASHES {
-                crate::install::verify_sha256(&path.join(name), hash)?;
-            }
-            Ok(())
-        } else if id == resources::KOKORO_MODEL_ID {
-            resources::verify_kokoro_model(path)
-        } else {
-            resources::verify_model(path, resources::model_spec(id)?)
-        }
+            .find(|path| verify::cached(id, path).is_ok())
     }
 
     pub fn register_local_model(&self, id: &str, path: &Path) -> Result<(), String> {
@@ -349,7 +334,7 @@ impl ModelSdk {
         if !path.is_absolute() {
             return Err("请选择模型的绝对路径。".into());
         }
-        Self::validate_model(id, path)?;
+        verify::cached(id, path)?;
         let mut registry = self.registry()?;
         registry
             .model_paths
@@ -436,11 +421,7 @@ mod tests {
     use super::*;
 
     fn temp_sdk(name: &str) -> ModelSdk {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        ModelSdk::new(std::env::temp_dir().join(format!("model-sdk-{name}-{nonce}"))).unwrap()
+        ModelSdk::new(crate::test_support::scratch_path(name)).unwrap()
     }
 
     #[test]
@@ -483,7 +464,7 @@ mod tests {
                         }
                         Family::Llama => {
                             task == TaskKind::TextGeneration
-                                && model.descriptor.id == resources::HY_MT_MODEL_ID
+                                && model.descriptor.profile == ModelProfile::HyMt2
                         }
                         Family::OnnxRuntime => {
                             (task == TaskKind::ObjectDetection
@@ -545,7 +526,7 @@ mod tests {
             model.task
         ));
         assert!(!engines::get("crispasr-cpu").unwrap().supports(
-            ModelProfile::HyMt15,
+            ModelProfile::HyMt2,
             ArtifactFormat::Gguf,
             TaskKind::Transcription
         ));
@@ -624,7 +605,10 @@ mod tests {
             b"{ invalid application data",
         )
         .unwrap();
-        assert_eq!(sdk.models().unwrap().len(), 26);
+        assert_eq!(
+            sdk.models().unwrap().len(),
+            resources::MODELS.len() + resources::WD14_MODELS.len() + 2
+        );
         fs::write(
             sdk.root().join("sdk-resources.json"),
             br#"{"enginePaths":{},"modelPaths":{}}"#,
@@ -638,7 +622,10 @@ mod tests {
         .unwrap();
         assert!(sdk.models().unwrap_err().contains("版本不兼容"));
         sdk.save_registry(&Registry::default()).unwrap();
-        assert_eq!(sdk.models().unwrap().len(), 26);
+        assert_eq!(
+            sdk.models().unwrap().len(),
+            resources::MODELS.len() + resources::WD14_MODELS.len() + 2
+        );
         let _ = fs::remove_dir_all(sdk.root());
     }
 

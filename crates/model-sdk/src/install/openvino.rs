@@ -323,15 +323,11 @@ mod tests {
     #[test]
     #[ignore = "requires access to the tagged Silero VAD release"]
     fn downloads_and_checks_vad_weight() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("model-sdk-vad-{nonce}"));
+        let root = crate::test_support::scratch_path("vad");
         let sdk = ModelSdk::new(&root).unwrap();
         let model = sdk.ensure_vad_model(&TaskControl::default()).unwrap();
         verify_sha256(&model, VAD_SHA256).unwrap();
-        let imported_root = std::env::temp_dir().join(format!("model-sdk-vad-import-{nonce}"));
+        let imported_root = crate::test_support::scratch_path("vad-import");
         let imported = ModelSdk::new(&imported_root)
             .unwrap()
             .register_local_vad_model(&model)

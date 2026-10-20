@@ -1,11 +1,9 @@
 use std::{
-    collections::HashMap,
-    fs::{self, File},
+    fs::File,
     io::Read,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::catalog::{ArtifactFormat, ModelProfile, TaskKind};
@@ -13,7 +11,7 @@ use crate::catalog::{ArtifactFormat, ModelProfile, TaskKind};
 pub const ENGINE_VERSION: &str = "v0.8.33";
 pub const LLAMA_ENGINE_VERSION: &str = "b9500";
 pub const ONNXRUNTIME_ENGINE_VERSION: &str = "1.30.0";
-pub const HY_MT_MODEL_ID: &str = "hy-mt-1.5-1.8b-q4";
+pub const HY_MT_MODEL_ID: &str = "hy-mt-2-1.8b-q4";
 pub const OPENVINO_ENGINE_ID: &str = "openvino-cpu";
 pub const OPENVINO_MODEL_ID: &str = "qwen3-asr-0.6b-int8";
 pub const KOKORO_MODEL_ID: &str = "kokoro-82m-v1.1-zh";
@@ -325,14 +323,36 @@ pub const MODELS: &[ModelSpec] = &[
     },
     ModelSpec {
         id: HY_MT_MODEL_ID,
-        label: "HY-MT1.5 1.8B Q4_K_M",
-        file: "HY-MT1.5-1.8B-Q4_K_M.gguf",
-        repo: "tencent/HY-MT1.5-1.8B-GGUF",
+        label: "HY-MT2 1.8B Q4_K_M",
+        file: "Hy-MT2-1.8B-Q4_K_M.gguf",
+        repo: "tencent/Hy-MT2-1.8B-GGUF",
         format: ArtifactFormat::Gguf,
-        profile: ModelProfile::HyMt15,
+        profile: ModelProfile::HyMt2,
         task: TaskKind::TextGeneration,
-        size: 1_133_080_512,
-        sha256: "4383ac0c3c8e476de98ff979c2a3f069f8c4fb385e7860cf2d28da896cc477c7",
+        size: 1_133_080_448,
+        sha256: "dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699",
+    },
+    ModelSpec {
+        id: "hy-mt-2-1.8b-q6",
+        label: "HY-MT2 1.8B Q6_K",
+        file: "Hy-MT2-1.8B-Q6_K.gguf",
+        repo: "tencent/Hy-MT2-1.8B-GGUF",
+        format: ArtifactFormat::Gguf,
+        profile: ModelProfile::HyMt2,
+        task: TaskKind::TextGeneration,
+        size: 1_474_785_120,
+        sha256: "d98fe604dec1f28f58f80d7d560f7177e584d3b8e5835862687660e5ff97cb40",
+    },
+    ModelSpec {
+        id: "hy-mt-2-1.8b-q8",
+        label: "HY-MT2 1.8B Q8_0",
+        file: "Hy-MT2-1.8B-Q8_0.gguf",
+        repo: "tencent/Hy-MT2-1.8B-GGUF",
+        format: ArtifactFormat::Gguf,
+        profile: ModelProfile::HyMt2,
+        task: TaskKind::TextGeneration,
+        size: 1_908_528_192,
+        sha256: "5c3fe0b1408a5ceb0143184ef247b11b579c525f4b02b060e6c851bb76fef1a4",
     },
     ModelSpec {
         id: "yolov8n-det-fp32",
@@ -580,114 +600,6 @@ pub fn model_url(spec: &ModelSpec, mirror: bool) -> String {
     )
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Selection {
-    pub engine_id: String,
-    pub model_id: String,
-    #[serde(default)]
-    pub translation_model_id: Option<String>,
-    #[serde(default)]
-    pub translation_engine_id: Option<String>,
-    #[serde(default = "default_vad_enabled")]
-    pub vad_enabled: bool,
-    #[serde(default)]
-    pub engine_paths: HashMap<String, String>,
-    #[serde(default)]
-    pub model_paths: HashMap<String, String>,
-    #[serde(default)]
-    pub ffmpeg_path: Option<String>,
-}
-
-fn default_vad_enabled() -> bool {
-    true
-}
-
-impl Default for Selection {
-    fn default() -> Self {
-        Self {
-            engine_id: "crispasr-vulkan".into(),
-            model_id: "base".into(),
-            translation_model_id: None,
-            translation_engine_id: None,
-            vad_enabled: true,
-            engine_paths: HashMap::new(),
-            model_paths: HashMap::new(),
-            ffmpeg_path: None,
-        }
-    }
-}
-
-pub fn load_selection(dir: &Path) -> Result<Selection, String> {
-    let file = dir.join("resources.json");
-    let source = if file.exists() {
-        file
-    } else {
-        dir.join("resources.json.bak")
-    };
-    if !source.exists() {
-        return Ok(Selection::default());
-    }
-    serde_json::from_slice(&fs::read(source).map_err(|error| error.to_string())?)
-        .map_err(|error| format!("资源选择配置无效: {error}"))
-}
-
-pub fn save_selection(dir: &Path, selection: &Selection) -> Result<(), String> {
-    fs::create_dir_all(dir).map_err(|error| error.to_string())?;
-    let path = dir.join("resources.json");
-    let temporary = dir.join("resources.json.tmp");
-    let backup = dir.join("resources.json.bak");
-    let content = serde_json::to_vec_pretty(selection).map_err(|error| error.to_string())?;
-    fs::write(&temporary, content).map_err(|error| error.to_string())?;
-    if path.exists() {
-        if backup.exists() {
-            fs::remove_file(&backup).map_err(|error| error.to_string())?;
-        }
-        fs::rename(&path, &backup).map_err(|error| error.to_string())?;
-    }
-    if let Err(error) = fs::rename(&temporary, &path) {
-        if backup.exists() {
-            let _ = fs::rename(&backup, &path);
-        }
-        return Err(error.to_string());
-    }
-    if backup.exists() {
-        let _ = fs::remove_file(backup);
-    }
-    Ok(())
-}
-
-pub fn engine_path(dir: &Path, selection: &Selection, id: &str) -> Option<PathBuf> {
-    if let Some(path) = selection.engine_paths.get(id) {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    let installed = dir.join("engines/crispasr").join(id).join("crispasr.exe");
-    if installed.is_file() {
-        return Some(installed);
-    }
-    None
-}
-
-pub fn model_path(dir: &Path, selection: &Selection, spec: &ModelSpec) -> Option<PathBuf> {
-    if let Some(path) = selection.model_paths.get(spec.id) {
-        let path = PathBuf::from(path);
-        if path
-            .metadata()
-            .is_ok_and(|metadata| metadata.is_file() && metadata.len() == spec.size)
-        {
-            return Some(path);
-        }
-    }
-    let path = dir.join("models").join(spec.file);
-    path.metadata()
-        .ok()
-        .filter(|metadata| metadata.is_file() && metadata.len() == spec.size)
-        .map(|_| path)
-}
-
 pub fn verify_model(path: &Path, spec: &ModelSpec) -> Result<(), String> {
     let size = path.metadata().map_err(|error| error.to_string())?.len();
     if size != spec.size {
@@ -710,32 +622,6 @@ pub fn verify_model(path: &Path, spec: &ModelSpec) -> Result<(), String> {
         return Err("模型 SHA-256 校验失败。".into());
     }
     Ok(())
-}
-
-pub fn openvino_python(dir: &Path, selection: &Selection) -> Option<PathBuf> {
-    let registered = selection
-        .engine_paths
-        .get(OPENVINO_ENGINE_ID)
-        .map(PathBuf::from);
-    registered.filter(|path| path.is_file()).or_else(|| {
-        let path = if cfg!(windows) {
-            dir.join("engines/openvino/venv/Scripts/python.exe")
-        } else {
-            dir.join("engines/openvino/venv/bin/python3")
-        };
-        (path.is_file() && dir.join("engines/openvino/ready.txt").is_file()).then_some(path)
-    })
-}
-
-pub fn openvino_model(dir: &Path, selection: &Selection) -> Option<PathBuf> {
-    let registered = selection
-        .model_paths
-        .get(OPENVINO_MODEL_ID)
-        .map(PathBuf::from);
-    registered
-        .into_iter()
-        .chain(std::iter::once(dir.join("models/openvino/qwen3_asr_int8")))
-        .find(|path| verify_openvino_model(path).is_ok())
 }
 
 pub fn verify_openvino_model(path: &Path) -> Result<(), String> {
@@ -765,10 +651,46 @@ pub fn verify_openvino_model(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    use std::fs;
+
     #[test]
     fn unknown_resource_ids_are_rejected() {
         assert!(engine_spec("openvino").is_err());
         assert!(model_spec("qwen3").is_err());
+    }
+
+    #[test]
+    fn hy_mt2_gguf_catalog_lists_quantizations() {
+        let specs: Vec<_> = MODELS
+            .iter()
+            .filter(|spec| spec.task == TaskKind::TextGeneration)
+            .collect();
+        assert_eq!(specs.len(), 3);
+        for spec in specs {
+            assert_eq!(spec.profile, ModelProfile::HyMt2);
+            assert_eq!(spec.format, ArtifactFormat::Gguf);
+            assert_eq!(spec.repo, "tencent/Hy-MT2-1.8B-GGUF");
+            assert!(spec.file.starts_with("Hy-MT2-1.8B-"));
+            assert!(spec.file.ends_with(".gguf"));
+            assert_eq!(spec.sha256.len(), 64);
+            assert!(model_url(spec, false).contains(
+                "huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/"
+            ));
+            assert!(model_url(spec, true).starts_with("https://hf-mirror.com/"));
+        }
+        assert_eq!(HY_MT_MODEL_ID, "hy-mt-2-1.8b-q4");
+        assert_eq!(
+            model_spec(HY_MT_MODEL_ID).unwrap().file,
+            "Hy-MT2-1.8B-Q4_K_M.gguf"
+        );
+        assert_eq!(
+            model_spec("hy-mt-2-1.8b-q6").unwrap().file,
+            "Hy-MT2-1.8B-Q6_K.gguf"
+        );
+        assert_eq!(
+            model_spec("hy-mt-2-1.8b-q8").unwrap().file,
+            "Hy-MT2-1.8B-Q8_0.gguf"
+        );
     }
 
     #[test]
@@ -818,8 +740,7 @@ mod tests {
             assert_eq!(spec.csv_sha256.len(), 64);
         }
         let spec = wd14_spec("wd-swinv2-tagger-v3").unwrap();
-        let dir = std::env::temp_dir().join(format!("wd14-test-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_support::scratch_path("wd14-test");
         assert!(verify_wd14_model(&dir, spec)
             .unwrap_err()
             .contains("model.onnx"));
@@ -842,41 +763,13 @@ mod tests {
             csv_size: 1,
             csv_sha256: "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
         };
-        let dir = std::env::temp_dir().join(format!("wd14-pair-test-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_support::scratch_path("wd14-pair-test");
         fs::write(dir.join("model.onnx"), b"a").unwrap();
         assert!(verify_wd14_model(&dir, &spec).is_err());
         fs::write(dir.join("selected_tags.csv"), b"b").unwrap();
         verify_wd14_model(&dir, &spec).unwrap();
         fs::write(dir.join("selected_tags.csv"), b"c").unwrap();
         assert!(verify_wd14_model(&dir, &spec).is_err());
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn old_selection_defaults_to_vad_enabled() {
-        let selection: Selection =
-            serde_json::from_str(r#"{"engineId":"vulkan","modelId":"base"}"#).unwrap();
-        assert!(selection.vad_enabled);
-        assert_eq!(selection.translation_model_id, None);
-        assert_eq!(selection.translation_engine_id, None);
-    }
-
-    #[test]
-    fn legacy_vulkan_install_is_not_selected_by_new_ids() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("subtitle-resource-test-{nonce}"));
-        let engine_dir = dir.join("engines/crispasr");
-        fs::create_dir_all(&engine_dir).unwrap();
-        fs::write(engine_dir.join("backend.txt"), "vulkan").unwrap();
-        fs::write(engine_dir.join("crispasr.exe"), b"test").unwrap();
-        let selection = load_selection(&dir).unwrap();
-        assert_eq!(selection.engine_id, "crispasr-vulkan");
-        assert_eq!(engine_path(&dir, &selection, "crispasr-vulkan"), None);
-        assert_eq!(engine_path(&dir, &selection, "cpu"), None);
         fs::remove_dir_all(dir).unwrap();
     }
 }

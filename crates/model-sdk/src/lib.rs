@@ -5,7 +5,6 @@ mod engines;
 mod generate;
 mod infer;
 mod install;
-pub mod migration;
 pub mod network;
 pub mod process;
 mod provider;
@@ -15,6 +14,9 @@ pub mod subtitle;
 mod synthesize;
 mod tag;
 pub mod task;
+#[cfg(test)]
+mod test_support;
+mod verify;
 
 pub use catalog::{ArtifactFormat, ModelProfile, TaskKind};
 pub use detect::{Detection, DetectionOptions, DetectionResult};

@@ -160,27 +160,18 @@ mod tests {
         io::{Read, Write},
         net::TcpListener,
         path::PathBuf,
-        sync::{
-            atomic::{AtomicU64, Ordering},
-            Arc,
-        },
+        sync::Arc,
         thread,
         time::Duration,
     };
 
     use crate::task::{TaskControl, CANCELLED_ERROR};
 
-    static SCRATCH_IDS: AtomicU64 = AtomicU64::new(0);
-
     struct Scratch(PathBuf);
 
     impl Scratch {
         fn new() -> Self {
-            let id = SCRATCH_IDS.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir()
-                .join(format!("model-sdk-download-{}-{id}", std::process::id()));
-            std::fs::create_dir_all(&path).unwrap();
-            Self(path)
+            Self(crate::test_support::scratch_path("download"))
         }
     }
 

@@ -28,8 +28,8 @@ pub enum ModelProfile {
     Qwen3Asr17b,
     #[serde(rename = "qwen3-asr-0.6b")]
     Qwen3Asr06b,
-    #[serde(rename = "hy-mt-1.5")]
-    HyMt15,
+    #[serde(rename = "hy-mt-2")]
+    HyMt2,
     #[serde(rename = "yolov8-detect")]
     YoloV8Detect,
     #[serde(rename = "yolo11-detect")]

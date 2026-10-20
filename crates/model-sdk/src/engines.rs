@@ -189,7 +189,7 @@ impl Adapter {
         if !path.is_absolute() || !path.is_file() || !valid_name {
             return Err(format!("请选择有效的 {expected} 完整路径。"));
         }
-        let system = diagnostics::system_check(&resources::Selection::default());
+        let system = diagnostics::system_check();
         let (suitable, reason) = self.suitability(&system, Some(path))?;
         if !suitable {
             return Err(reason.unwrap_or_else(|| "此引擎不适合当前设备。".into()));
@@ -201,7 +201,7 @@ impl Adapter {
         match self.family {
             Family::CrispAsr => {
                 let spec = resources::engine_spec(self.id)?;
-                let system = diagnostics::system_check(&resources::Selection::default());
+                let system = diagnostics::system_check();
                 diagnostics::probe_crispasr(spec, path, &system, model)
             }
             Family::OpenVino => {
@@ -376,7 +376,7 @@ mod llama {
     use super::*;
 
     pub fn supports(profile: ModelProfile, format: ArtifactFormat) -> bool {
-        profile == ModelProfile::HyMt15 && format == ArtifactFormat::Gguf
+        profile == ModelProfile::HyMt2 && format == ArtifactFormat::Gguf
     }
 
     pub fn managed_path(root: &Path, id: &str) -> PathBuf {

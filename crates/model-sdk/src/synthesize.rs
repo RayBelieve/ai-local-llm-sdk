@@ -47,8 +47,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_requests_before_loading_resources() {
-        let root =
-            std::env::temp_dir().join(format!("model-sdk-synthesis-test-{}", std::process::id()));
+        let root = crate::test_support::scratch_path("synthesis");
         let sdk = ModelSdk::new(&root).unwrap();
         let task = TaskControl::default();
         let output = root.join("speech.wav");

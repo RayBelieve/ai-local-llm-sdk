@@ -1,12 +1,13 @@
 {
-  "name": "subtitle-workbench",
+  "name": "model-sdk-workbench",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "installer": "tauri build && node scripts/rename-nsis-installer.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

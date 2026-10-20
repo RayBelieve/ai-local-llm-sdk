@@ -11,10 +11,7 @@ use std::{
 
 use serde::Serialize;
 
-use crate::{
-    process::hidden_command,
-    resources::{EngineSpec, Selection},
-};
+use crate::{process::hidden_command, resources::EngineSpec};
 
 static PROBES: OnceLock<Mutex<HashMap<String, Result<(), String>>>> = OnceLock::new();
 
@@ -86,7 +83,7 @@ fn ffmpeg_works(path: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn system_check(selection: &Selection) -> SystemCheck {
+pub fn system_check() -> SystemCheck {
     let platform = std::env::consts::OS.to_string();
     let architecture = std::env::consts::ARCH.to_string();
     #[cfg(windows)]
@@ -195,20 +192,18 @@ pub fn system_check(selection: &Selection) -> SystemCheck {
                 .and_then(|kib| kib.checked_mul(1024))
         })
         .flatten();
-    let ffmpeg_path = selection.ffmpeg_path.clone().or_else(|| {
-        let locator = if platform == "windows" {
-            "where.exe"
-        } else {
-            "which"
-        };
-        hidden_command(locator)
-            .arg("ffmpeg")
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .and_then(|output| output.lines().next().map(str::trim).map(str::to_owned))
-    });
+    let locator = if platform == "windows" {
+        "where.exe"
+    } else {
+        "which"
+    };
+    let ffmpeg_path = hidden_command(locator)
+        .arg("ffmpeg")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|output| output.lines().next().map(str::trim).map(str::to_owned));
     let ffmpeg_available = ffmpeg_path.as_deref().is_some_and(ffmpeg_works);
     if !ffmpeg_available {
         diagnostics.push("未找到可运行的 FFmpeg，请安装或登记本机路径。".into());
@@ -280,18 +275,6 @@ pub fn suitability(spec: &EngineSpec, check: &SystemCheck) -> (bool, Option<Stri
         }
     }
     (true, None)
-}
-
-pub fn recommended_engine_id(available: impl Fn(&str) -> bool) -> Option<&'static str> {
-    [
-        "crispasr-cuda13",
-        "crispasr-cuda12",
-        "crispasr-vulkan",
-        "crispasr-cpu",
-        "crispasr-cpu-legacy",
-    ]
-    .into_iter()
-    .find(|id| available(id))
 }
 
 fn probe_command(mut command: Command, timeout: Duration) -> Result<String, String> {
@@ -569,10 +552,6 @@ mod tests {
         assert!(suitability(cuda12, &old_gpu).0);
         old_gpu.nvidia_compute_capability = None;
         assert!(!suitability(cuda12, &old_gpu).0);
-        assert_eq!(
-            recommended_engine_id(|id| suitability(engine_spec(id).unwrap(), &eligible).0),
-            Some("crispasr-cuda13")
-        );
     }
 
     #[test]
@@ -593,7 +572,7 @@ mod tests {
         let model = std::env::var("MODEL_SDK_PROBE_MODEL").unwrap();
         let id = std::env::var("MODEL_SDK_PROBE_VARIANT").unwrap();
         let spec = engine_spec(&id).unwrap();
-        let check = system_check(&Selection::default());
+        let check = system_check();
         let profile = if std::env::var("MODEL_SDK_PROBE_MODEL_ID")
             .unwrap_or_default()
             .starts_with("qwen3-")

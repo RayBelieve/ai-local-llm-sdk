@@ -6,12 +6,12 @@
 
 - `TaskKind::Transcription`：语音转写；`TaskKind::TextGeneration`：文本生成；`TaskKind::ObjectDetection`：图片目标检测；`TaskKind::ImageTagging`：图片打标；`TaskKind::SpeechSynthesis`：语音合成。
 - `ArtifactFormat::Ggml`、`Gguf`、`OpenVinoIr`、`Onnx`：权重的文件格式，不编码 provider。
-- `ModelProfile::Whisper`、`Qwen3Asr17b`、`Qwen3Asr06b`、`HyMt15`、`YoloV8Detect`、`Yolo11Detect`、`Wd14V2`、`Wd14V3`、`KokoroZh`：模型架构及推理协议。格式相同不代表适配器一定支持。
+- `ModelProfile::Whisper`、`Qwen3Asr17b`、`Qwen3Asr06b`、`HyMt2`、`YoloV8Detect`、`Yolo11Detect`、`Wd14V2`、`Wd14V3`、`KokoroZh`：模型架构及推理协议。格式相同不代表适配器一定支持。
 - `ModelDescriptor`：`id`、`label`、`profile`、`artifact_format`、`task`。
 - `InstalledModel`：`descriptor`、已验证的 `path`、`size_bytes`、`downloadable`；没有唯一 provider 字段。
 - `EngineInfo`：`id`、`family`、`variant`、`label`、`version`、`download_mb`、`path`、`suitable`、`reason`、`tasks`。一个运行时可以支持多个任务。
 
-现有模型为 15 个单文件模型、1 个 OpenVINO IR 目录模型、9 个 WD-14 双文件目录模型及 1 个 Kokoro 三文件目录模型。Whisper GGML 共 6 份；Qwen3-ASR 1.7B GGUF 共 4 份；HY-MT1.5 GGUF 共 1 份；Qwen3-ASR 0.6B INT8 OpenVINO IR 共 1 份；YOLOv8/YOLO11 检测 ONNX 各有 Nano、Small 两份；WD-14 提供 5 款 v2 和 4 款 v3。
+现有模型为 17 个单文件模型、1 个 OpenVINO IR 目录模型、9 个 WD-14 双文件目录模型及 1 个 Kokoro 三文件目录模型。Whisper GGML 共 6 份；Qwen3-ASR 1.7B GGUF 共 4 份；HY-MT2 GGUF 共 3 份（Q4_K_M、Q6_K、Q8_0，默认 ID `hy-mt-2-1.8b-q4`）；Qwen3-ASR 0.6B INT8 OpenVINO IR 共 1 份；YOLOv8/YOLO11 检测 ONNX 各有 Nano、Small 两份；WD-14 提供 5 款 v2 和 4 款 v3。
 
 ## 引擎 ID
 
@@ -39,6 +39,8 @@
 - `register_local_model(model_id, path) -> Result<(), String>`：只登记内置模型 ID；校验路径、文件大小与 SHA-256，OpenVINO IR 还检查目录结构和已知权重哈希。
 
 资源记录写入 `root/sdk-resources.json`，格式包含 `version: 1`、`enginePaths` 和 `modelPaths`。SDK 不从应用的 `resources.json` 读取自身配置。遇到无版本的旧 SDK 记录或不支持的版本会报“版本不兼容”，不会丢弃、迁移或覆盖旧数据。旧资源 ID 不可直接用于新 API。
+
+权重校验按“模型 ID + 路径 + 每个文件的大小与修改时间”在进程内缓存：`models()`、`model_path()`、`check()` 以及每次推理前的就绪检查不会重复计算已校验权重的 SHA-256，失败结果同样缓存，损坏的权重不会在每次刷新时重算。文件被替换（大小或修改时间变化）后自动重新校验一次；文件被删除时校验仍然失败，缓存不会把路径恢复为可用。安装后的首次读取会再次校验权重，然后缓存结果。
 
 ## 推理
 

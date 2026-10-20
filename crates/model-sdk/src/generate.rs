@@ -17,7 +17,6 @@ use crate::{
     diagnostics,
     engines::{self, Family},
     process::hidden_command,
-    resources::Selection,
     sdk::ModelSdk,
     task::TaskControl,
 };
@@ -211,7 +210,7 @@ impl ModelSdk {
             *active = None;
         }
         if active.is_none() {
-            let check = diagnostics::system_check(&Selection::default());
+            let check = diagnostics::system_check();
             let model_bytes = fs::metadata(&model)
                 .map_err(|error| error.to_string())?
                 .len();

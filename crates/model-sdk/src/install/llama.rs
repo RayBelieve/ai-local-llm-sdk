@@ -140,11 +140,7 @@ mod tests {
 
     #[test]
     fn extracts_server_and_dependencies_without_archive_paths() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("llama-archive-{nonce}"));
+        let root = crate::test_support::scratch_path("llama-archive");
         fs::create_dir_all(root.join("runtime")).unwrap();
         let archive = root.join("engine.zip");
         let mut zip = zip::ZipWriter::new(File::create(&archive).unwrap());

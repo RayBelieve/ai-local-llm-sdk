@@ -221,12 +221,7 @@ mod tests {
 
     #[test]
     fn concurrent_transcriptions_keep_job_files_separate() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("model-sdk-jobs-{}-{nonce}", std::process::id()));
+        let root = crate::test_support::scratch_path("jobs");
         let sdk = ModelSdk::new(&root).unwrap();
         let media = root.join("media.wav");
         let engine = root.join("engine.exe");

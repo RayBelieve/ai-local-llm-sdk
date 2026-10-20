@@ -1,12 +1,12 @@
 [package]
-name = "subtitle-workbench"
+name = "model-sdk-workbench"
 version = "0.1.0"
-description = "Local subtitle workbench"
-authors = ["Subtitle Workbench"]
+description = "Model SDK debug console"
+authors = ["Model SDK Workbench"]
 edition = "2021"
 
 [lib]
-name = "subtitle_workbench_lib"
+name = "model_sdk_workbench_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -78,6 +78,15 @@ struct GenerateInput {
     run_id: u64,
 }
 
+fn sdk(app: &tauri::AppHandle) -> Result<Arc<ModelSdk>, String> {
+    let state = app.state::<AppState>();
+    let mut current = state.sdk.lock().map_err(|error| error.to_string())?;
+    if current.is_none() {
+        *current = Some(Arc::new(ModelSdk::new(data_dir()?)?));
+    }
+    Ok(current.as_ref().expect("SDK initialized").clone())
+}
+
 fn data_dir() -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let executable_dir = executable.parent().ok_or("无法确定程序所在目录。")?;
@@ -95,15 +104,6 @@ fn data_dir() -> Result<PathBuf, String> {
         )
     })?;
     Ok(path)
-}
-
-fn sdk(app: &tauri::AppHandle) -> Result<Arc<ModelSdk>, String> {
-    let state = app.state::<AppState>();
-    let mut current = state.sdk.lock().map_err(|error| error.to_string())?;
-    if current.is_none() {
-        *current = Some(Arc::new(ModelSdk::new(data_dir()?)?));
-    }
-    Ok(current.as_ref().expect("SDK initialized").clone())
 }
 
 fn task(app: &tauri::AppHandle) -> Arc<TaskControl> {
